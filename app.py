@@ -185,6 +185,9 @@ button[kind="header"]                          {{ display: none !important; }}
 @media (max-width: 1200px) {{
     .block-container {{ padding-left: 2.5rem !important; padding-right: 2.5rem !important; }}
 }}
+@media (max-width: 768px) {{
+    .block-container {{ padding-left: 1.25rem !important; padding-right: 1.25rem !important; }}
+}}
 
 /* Block-container padding-top scales with navbar height */
 @media (max-width: 768px) {{
@@ -518,7 +521,7 @@ button[data-testid="stBaseButton-primary"]:hover {{
 }}
 
 /* ── NAVBAR (responsive) ── */
-.gst-navbar {{
+.gst-navbar {
     position: fixed !important;
     top: 0 !important; left: 0 !important; right: 0 !important;
     z-index: 999999 !important;
@@ -532,37 +535,37 @@ button[data-testid="stBaseButton-primary"]:hover {{
     border-bottom: 1px solid #1e293b;
     height: 76px;
     box-shadow: 0 2px 12px rgba(0,0,0,0.18);
-}}
+}
 
-.gst-brand-slot {{
+.gst-brand-slot {
     display: flex;
     justify-content: flex-start;
     align-items: center;
     min-width: 0;
-}}
+}
 
-.gst-brand {{
+.gst-brand {
     display: flex;
     align-items: center;
     gap: 12px;
     text-decoration: none !important;
     white-space: nowrap;
     min-width: 0;
-}}
-.gst-brand:hover, .gst-brand:visited, .gst-brand:focus {{
+}
+.gst-brand:hover, .gst-brand:visited, .gst-brand:focus {
     text-decoration: none !important;
     color: inherit !important;
-}}
+}
 
-.brand-logo {{
+.brand-logo {
     height: 40px;
     width: auto;
     max-width: 180px;
     object-fit: contain;
     display: block;
-}}
+}
 
-.brand-icon {{
+.brand-icon {
     width: 38px;
     height: 38px;
     background: linear-gradient(135deg, #2563eb, #1d4ed8);
@@ -573,18 +576,19 @@ button[data-testid="stBaseButton-primary"]:hover {{
     font-size: 18px;
     box-shadow: 0 4px 12px rgba(37,99,235,0.35);
     flex-shrink: 0;
-}}
+}
 
-.brand-text {{
+.brand-text {
     display: flex;
     flex-direction: column;
     line-height: 1.2;
     min-width: 0;
-}}
-.brand-title    {{ color: #f1f5f9; font-size: 15px; font-weight: 700; letter-spacing: -0.2px; }}
-.brand-subtitle {{ color: #64748b; font-size: 11.5px; font-weight: 500; margin-top: 1px; }}
+}
+.brand-title    { color: #f1f5f9; font-size: 15px; font-weight: 700; letter-spacing: -0.2px; }
+.brand-subtitle { color: #64748b; font-size: 11.5px; font-weight: 500; margin-top: 1px; }
 
-.gst-tabs {{
+/* Tab strip — scrolls horizontally as a last-resort fallback */
+.gst-tabs {
     display: flex;
     align-items: center;
     gap: 6px;
@@ -595,12 +599,12 @@ button[data-testid="stBaseButton-primary"]:hover {{
     scrollbar-color: #334155 transparent;
     -webkit-overflow-scrolling: touch;
     padding: 0 4px;
-}}
-.gst-tabs::-webkit-scrollbar {{ height: 3px; }}
-.gst-tabs::-webkit-scrollbar-thumb {{ background: #334155; border-radius: 4px; }}
-.gst-tabs::-webkit-scrollbar-track {{ background: transparent; }}
+}
+.gst-tabs::-webkit-scrollbar { height: 3px; }
+.gst-tabs::-webkit-scrollbar-thumb { background: #334155; border-radius: 4px; }
+.gst-tabs::-webkit-scrollbar-track { background: transparent; }
 
-.gst-tab {{
+.gst-tab {
     display: inline-flex;
     align-items: center;
     gap: 8px;
@@ -614,65 +618,69 @@ button[data-testid="stBaseButton-primary"]:hover {{
     text-decoration: none !important;
     color: #94a3b8 !important;
     cursor: pointer;
-}}
-.gst-tab:hover {{
+}
+.gst-tab:hover {
     background: #1e293b;
     color: #e2e8f0 !important;
     text-decoration: none !important;
-}}
-.gst-tab.active {{
+}
+.gst-tab.active {
     background: linear-gradient(135deg, #2563eb, #1d4ed8);
     color: #ffffff !important;
     font-weight: 600;
     box-shadow: 0 4px 14px rgba(37,99,235,0.32);
     text-decoration: none !important;
-}}
-.tab-icon {{ font-size: 14px; opacity: 0.95; }}
-.tab-label {{ display: inline; }}
+}
+.tab-icon { font-size: 14px; opacity: 0.95; }
+.tab-label { display: inline; }
 
-.gst-right-slot {{
+.gst-right-slot {
     display: flex;
     justify-content: flex-end;
     align-items: center;
-}}
+}
 
-@media (max-width: 1200px) {{
-    .gst-navbar {{ padding: 0 2rem; column-gap: 12px; }}
-    .gst-tab    {{ padding: 8px 14px; font-size: 13.5px; }}
-}}
+/* ── 1200px: tighter padding ── */
+@media (max-width: 1200px) {
+    .gst-navbar { padding: 0 2rem; column-gap: 12px; }
+    .gst-tab    { padding: 8px 14px; font-size: 13.5px; }
+}
 
-@media (max-width: 1000px) {{
-    .brand-subtitle {{ display: none; }}
-    .brand-title    {{ font-size: 14px; }}
-    .gst-navbar     {{ padding: 0 1.5rem; }}
-    .gst-tab        {{ padding: 7px 12px; font-size: 13px; gap: 6px; }}
-}}
+/* ── 1000px: hide brand subtitle ── */
+@media (max-width: 1000px) {
+    .brand-subtitle { display: none; }
+    .brand-title    { font-size: 14px; }
+    .gst-navbar     { padding: 0 1.5rem; }
+    .gst-tab        { padding: 7px 12px; font-size: 13px; gap: 6px; }
+}
 
-@media (max-width: 768px) {{
-    .gst-navbar {{
+/* ── 768px (mobile): icon-only tabs, hide brand text, shorter navbar ── */
+@media (max-width: 768px) {
+    .gst-navbar {
         height: 60px;
         padding: 0 0.75rem;
         column-gap: 8px;
-    }}
-    .brand-text {{ display: none !important; }}
-    .brand-logo {{ height: 32px; max-width: 120px; }}
-    .brand-icon {{ width: 34px; height: 34px; font-size: 15px; border-radius: 8px; }}
+    }
+    .brand-text { display: none !important; }
+    .brand-logo { height: 32px; max-width: 120px; }
+    .brand-icon { width: 34px; height: 34px; font-size: 15px; border-radius: 8px; }
 
-    .gst-tabs {{ justify-content: flex-start; gap: 4px; }}
-    .gst-tab {{
+    .gst-tabs { justify-content: flex-start; gap: 4px; }
+    .gst-tab {
         padding: 7px 9px;
         gap: 0;
         border-radius: 8px;
-    }}
-    .tab-label {{ display: none; }}
-    .tab-icon  {{ font-size: 18px; }}
-}}
+    }
+    .tab-label { display: none; }   /* show only the icon */
+    .tab-icon  { font-size: 18px; }
+}
 
-@media (max-width: 420px) {{
-    .gst-navbar {{ padding: 0 0.5rem; column-gap: 4px; }}
-    .gst-tab    {{ padding: 6px 7px; }}
-    .tab-icon   {{ font-size: 17px; }}
-}}
+/* ── Very small (<420px): pack tighter still ── */
+@media (max-width: 420px) {
+    .gst-navbar { padding: 0 0.5rem; column-gap: 4px; }
+    .gst-tab    { padding: 6px 7px; }
+    .tab-icon   { font-size: 17px; }
+}
 
 /* ── METRIC CARDS ── */
 [data-testid="stMetric"] {{ color: {TEXT_PRIMARY} !important; }}
