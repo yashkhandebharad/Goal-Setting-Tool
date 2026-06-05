@@ -491,43 +491,40 @@ button[data-testid="stBaseButton-primary"]:hover {{
     color: #ffffff !important;
 }}
 
-/* ── NAVBAR ── */
-.gst-navbar {{
+/* ── NAVBAR (button-based) ── */
+
+/* Fixed navbar background bar at the top */
+.gst-navbar-bg {{
     position: fixed !important;
     top: 0 !important;
     left: 0 !important;
     right: 0 !important;
-    z-index: 999999 !important;
+    z-index: 999998 !important;
     width: 100%;
-    display: grid;
-    grid-template-columns: 1fr auto 1fr;
-    align-items: center;
-    padding: 0 4rem;
+    height: 76px;
     background: #0f172a;
     border-bottom: 1px solid #1e293b;
-    height: 76px;
     box-shadow: 0 2px 12px rgba(0,0,0,0.18);
+    pointer-events: none;
 }}
 
-@media (max-width: 1200px) {{
-    .gst-navbar {{ padding: 0 2.5rem; }}
-}}
-@media (max-width: 768px) {{
-    .gst-navbar {{ padding: 0 1.25rem; }}
-}}
-
-.gst-brand-slot {{ display: flex; justify-content: flex-start; align-items: center; }}
-
-.gst-brand {{
+/* Brand block — fixed on the left side of the navbar */
+.gst-navbar-brand {{
+    position: fixed !important;
+    top: 0 !important;
+    left: 4rem !important;
+    z-index: 999999 !important;
+    height: 76px;
     display: flex;
     align-items: center;
     gap: 12px;
-    text-decoration: none !important;
-    white-space: nowrap;
+    pointer-events: none;
 }}
-.gst-brand:hover, .gst-brand:visited, .gst-brand:focus {{
-    text-decoration: none !important;
-    color: inherit !important;
+@media (max-width: 1200px) {{
+    .gst-navbar-brand {{ left: 2.5rem !important; }}
+}}
+@media (max-width: 768px) {{
+    .gst-navbar-brand {{ left: 1.25rem !important; }}
 }}
 
 .brand-logo {{
@@ -555,45 +552,84 @@ button[data-testid="stBaseButton-primary"]:hover {{
 .brand-title    {{ color: #f1f5f9; font-size: 15px; font-weight: 700; letter-spacing: -0.2px; }}
 .brand-subtitle {{ color: #64748b; font-size: 11.5px; font-weight: 500; margin-top: 1px; }}
 
-.gst-tabs {{
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    justify-content: center;
+/* Container holding the Streamlit tab buttons — fixed at top, centered */
+div[data-testid="stHorizontalBlock"]:has(button[data-testid="stBaseButton-primary"][kind="primary"]) ,
+div.gst-tab-buttons + div[data-testid="stHorizontalBlock"],
+div.gst-tab-buttons ~ div[data-testid="stHorizontalBlock"]:first-of-type {{
+    position: fixed !important;
+    top: 16px !important;
+    left: 50% !important;
+    transform: translateX(-50%) !important;
+    z-index: 999999 !important;
+    width: auto !important;
+    max-width: 900px !important;
+    gap: 6px !important;
+    background: transparent !important;
 }}
 
-.gst-tab {{
-    display: inline-flex;
-    align-items: center;
-    gap: 8px;
-    font-size: 14px;
-    font-weight: 500;
-    padding: 9px 18px;
-    border-radius: 9px;
-    white-space: nowrap;
-    transition: background 0.15s, color 0.15s;
-    text-decoration: none !important;
+/* Style every tab button to look like a navbar tab */
+div.gst-tab-buttons + div[data-testid="stHorizontalBlock"] button,
+div.gst-tab-buttons ~ div[data-testid="stHorizontalBlock"]:first-of-type button {{
+    background: transparent !important;
+    border: none !important;
     color: #94a3b8 !important;
-    cursor: pointer;
+    font-size: 14px !important;
+    font-weight: 500 !important;
+    padding: 9px 18px !important;
+    border-radius: 9px !important;
+    height: 44px !important;
+    white-space: nowrap !important;
+    transition: background 0.15s, color 0.15s !important;
+    box-shadow: none !important;
 }}
-.gst-tab:hover {{
-    background: #1e293b;
-    color: #e2e8f0 !important;
-    text-decoration: none !important;
-}}
-.gst-tab.active {{
-    background: linear-gradient(135deg, #2563eb, #1d4ed8);
-    color: #ffffff !important;
-    font-weight: 600;
-    box-shadow: 0 4px 14px rgba(37,99,235,0.32);
-    text-decoration: none !important;
-}}
-.tab-icon {{ font-size: 14px; opacity: 0.95; }}
 
-.gst-right-slot {{
-    display: flex;
-    justify-content: flex-end;
-    align-items: center;
+div.gst-tab-buttons + div[data-testid="stHorizontalBlock"] button p,
+div.gst-tab-buttons + div[data-testid="stHorizontalBlock"] button span,
+div.gst-tab-buttons + div[data-testid="stHorizontalBlock"] button div,
+div.gst-tab-buttons ~ div[data-testid="stHorizontalBlock"]:first-of-type button p,
+div.gst-tab-buttons ~ div[data-testid="stHorizontalBlock"]:first-of-type button span,
+div.gst-tab-buttons ~ div[data-testid="stHorizontalBlock"]:first-of-type button div {{
+    color: #94a3b8 !important;
+    font-size: 14px !important;
+    font-weight: 500 !important;
+}}
+
+div.gst-tab-buttons + div[data-testid="stHorizontalBlock"] button:hover,
+div.gst-tab-buttons ~ div[data-testid="stHorizontalBlock"]:first-of-type button:hover {{
+    background: #1e293b !important;
+    color: #e2e8f0 !important;
+    border: none !important;
+}}
+div.gst-tab-buttons + div[data-testid="stHorizontalBlock"] button:hover p,
+div.gst-tab-buttons + div[data-testid="stHorizontalBlock"] button:hover span,
+div.gst-tab-buttons + div[data-testid="stHorizontalBlock"] button:hover div,
+div.gst-tab-buttons ~ div[data-testid="stHorizontalBlock"]:first-of-type button:hover p,
+div.gst-tab-buttons ~ div[data-testid="stHorizontalBlock"]:first-of-type button:hover span,
+div.gst-tab-buttons ~ div[data-testid="stHorizontalBlock"]:first-of-type button:hover div {{
+    color: #e2e8f0 !important;
+}}
+
+/* Active tab — primary button gets the blue gradient */
+div.gst-tab-buttons + div[data-testid="stHorizontalBlock"] button[kind="primary"],
+div.gst-tab-buttons ~ div[data-testid="stHorizontalBlock"]:first-of-type button[kind="primary"] {{
+    background: linear-gradient(135deg, #2563eb, #1d4ed8) !important;
+    color: #ffffff !important;
+    font-weight: 600 !important;
+    box-shadow: 0 4px 14px rgba(37,99,235,0.32) !important;
+    border: none !important;
+}}
+div.gst-tab-buttons + div[data-testid="stHorizontalBlock"] button[kind="primary"] p,
+div.gst-tab-buttons + div[data-testid="stHorizontalBlock"] button[kind="primary"] span,
+div.gst-tab-buttons + div[data-testid="stHorizontalBlock"] button[kind="primary"] div,
+div.gst-tab-buttons ~ div[data-testid="stHorizontalBlock"]:first-of-type button[kind="primary"] p,
+div.gst-tab-buttons ~ div[data-testid="stHorizontalBlock"]:first-of-type button[kind="primary"] span,
+div.gst-tab-buttons ~ div[data-testid="stHorizontalBlock"]:first-of-type button[kind="primary"] div {{
+    color: #ffffff !important;
+}}
+
+/* Hide the marker div itself — it's only used as a CSS selector anchor */
+div.gst-tab-buttons {{
+    display: none !important;
 }}
 
 /* ── METRIC CARDS ── */
@@ -765,14 +801,13 @@ LOGO_DATA_URI = _load_logo_b64()
 
 
 def render_navbar(active_idx: int):
-    tabs_html = "".join(
-        f'<a href="?tab={i}" target="_top" '
-        f'class="gst-tab{" active" if i == active_idx else ""}" '
-        f'data-tab="{i}">'
-        f'<span class="tab-icon">{icon}</span>{name}</a>'
-        for i, (name, icon) in enumerate(TABS)
-    )
+    """
+    Render the top navbar.
 
+    Uses real Streamlit buttons styled via CSS to look like navbar tabs.
+    This avoids JavaScript / iframe issues on Streamlit Cloud.
+    """
+    # ── Render the brand block (logo or fallback icon) as a fixed-position HTML ──
     if LOGO_DATA_URI:
         brand_inner = f'<img src="{LOGO_DATA_URI}" alt="Company logo" class="brand-logo" />'
     else:
@@ -784,81 +819,28 @@ def render_navbar(active_idx: int):
             '</div>'
         )
 
+    # Fixed navbar background + brand (visual only — buttons handle clicks)
     st.markdown(f"""
-    <nav class="gst-navbar">
-        <div class="gst-brand-slot">
-            <a class="gst-brand" href="?tab=0" target="_top" data-tab="0">
-                {brand_inner}
-            </a>
-        </div>
-        <div class="gst-tabs">{tabs_html}</div>
-        <div class="gst-right-slot"></div>
-    </nav>
-
-    <script>
-    (function() {{
-        // Resolve the document that actually holds the navbar.
-        // On local Streamlit this is window.parent.document; on Streamlit
-        // Cloud the app is nested deeper inside an iframe, so we walk
-        // upwards until we find a document with our navbar, falling back
-        // to the current document if cross-origin access is blocked.
-        function findNav() {{
-            const candidates = [];
-            try {{ candidates.push(window.top.document); }} catch (e) {{}}
-            try {{ candidates.push(window.parent.document); }} catch (e) {{}}
-            candidates.push(window.document);
-
-            for (const doc of candidates) {{
-                if (!doc) continue;
-                const found = doc.querySelector('.gst-navbar');
-                if (found) return {{ doc, nav: found }};
-            }}
-            return null;
-        }}
-
-        // Resolve the window we should navigate. Prefer the top-level
-        // window so the URL change actually reflects in the address bar;
-        // fall back to the current window if blocked.
-        function findTargetWindow() {{
-            try {{
-                void window.top.location.href;   // throws on cross-origin
-                return window.top;
-            }} catch (e) {{}}
-            try {{
-                void window.parent.location.href;
-                return window.parent;
-            }} catch (e) {{}}
-            return window;
-        }}
-
-        const result = findNav();
-        if (!result) return;
-        const {{ nav }} = result;
-        if (nav.dataset.bound === '1') return;
-        nav.dataset.bound = '1';
-
-        nav.addEventListener('click', function(e) {{
-            const link = e.target.closest('a[data-tab]');
-            if (!link) return;
-            e.preventDefault();
-            e.stopPropagation();
-
-            const tab = link.dataset.tab;
-            const targetWin = findTargetWindow();
-
-            try {{
-                const url = new URL(targetWin.location.href);
-                url.searchParams.set('tab', tab);
-                targetWin.location.href = url.toString();
-            }} catch (err) {{
-                // Last-resort fallback: let the anchor's target="_top"
-                // attribute handle the navigation natively.
-                window.location.href = link.getAttribute('href');
-            }}
-        }}, true);
-    }})();
-    </script>
+    <div class="gst-navbar-bg"></div>
+    <div class="gst-navbar-brand">{brand_inner}</div>
     """, unsafe_allow_html=True)
+
+    # ── Render real Streamlit buttons in a horizontal row ──
+    # These are wrapped in a container with a unique class so we can style them
+    # to look like navbar tabs.
+    st.markdown('<div class="gst-tab-buttons">', unsafe_allow_html=True)
+    cols = st.columns(len(TABS))
+    for i, (name, icon) in enumerate(TABS):
+        with cols[i]:
+            is_active = (i == active_idx)
+            label = f"{icon}  {name}"
+            btn_key = f"navbtn_{i}"
+            # Use type='primary' for the active tab to highlight it
+            btn_type = "primary" if is_active else "secondary"
+            if st.button(label, key=btn_key, type=btn_type,
+                         use_container_width=True):
+                go_to_tab(i)
+    st.markdown('</div>', unsafe_allow_html=True)
 
 render_navbar(active)
 
