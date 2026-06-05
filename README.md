@@ -24,9 +24,9 @@ The final territory goals can be reviewed in interactive tables and charts, and 
 ### 🎯 National Goal Setting
 Three allocation models to distribute the national goal across territories:
 
-- **Weighted Model** — Blends recent and prior period sales using configurable weights, with volume smoothing, growth cap/floor controls, and a two-pass redistribution mechanism. Includes a pro-rata fallback to guarantee the total allocation always matches the National Goal.
-- **Fair Share Model** — Distributes the goal in proportion to each territory's recent sales contribution.
-- **Equal Allocation Model** — Splits a chosen portion of the goal equally across all territories. Useful for new product launches where historical data isn't predictive.
+- **Weighted Model** - Blends recent and prior period sales using configurable weights, with volume smoothing, growth cap/floor controls, and a two-pass redistribution mechanism. Includes a pro-rata fallback to guarantee the total allocation always matches the National Goal.
+- **Fair Share Model** - Distributes the goal in proportion to each territory's recent sales contribution.
+- **Equal Allocation Model** - Splits a chosen portion of the goal equally across all territories. Useful for new product launches where historical data isn't predictive.
 
 ### 📊 Final Allocation
 - Review the finalised territory goals in an interactive table and bar chart
