@@ -1,0 +1,25 @@
+# Streamlit secrets - NEVER commit
+.streamlit/secrets.toml
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+venv/
+.venv/
+env/
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Data files (don't commit client data)
+*.xlsx
+*.csv
+data/
+uploads/
+outputs/

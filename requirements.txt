@@ -1,0 +1,17 @@
+streamlit==1.30.0
+pandas
+openpyxl
+xlsxwriter
+numpy
+stqdm
+statsmodels
+rapidfuzz
+matplotlib
+scikit-learn
+plotly
+streamlit-option-menu
+streamlit-aggrid
+streamlit-extras
+prophet
+xgboost
+google-generativeai
