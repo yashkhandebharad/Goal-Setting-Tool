@@ -2,7 +2,6 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
-import streamlit.components.v1 as components
 from io import BytesIO
 from openpyxl.styles import Font, PatternFill, Border, Side, Alignment
 from openpyxl.utils import get_column_letter
@@ -767,7 +766,7 @@ LOGO_DATA_URI = _load_logo_b64()
 
 def render_navbar(active_idx: int):
     tabs_html = "".join(
-        f'<a href="?tab={i}" '
+        f'<a href="?tab={i}" target="_top" '
         f'class="gst-tab{" active" if i == active_idx else ""}" '
         f'data-tab="{i}">'
         f'<span class="tab-icon">{icon}</span>{name}</a>'
@@ -788,54 +787,80 @@ def render_navbar(active_idx: int):
     st.markdown(f"""
     <nav class="gst-navbar">
         <div class="gst-brand-slot">
-            <a class="gst-brand" href="?tab=0">
+            <a class="gst-brand" href="?tab=0" target="_top" data-tab="0">
                 {brand_inner}
             </a>
         </div>
         <div class="gst-tabs">{tabs_html}</div>
         <div class="gst-right-slot"></div>
     </nav>
-    """, unsafe_allow_html=True)
-render_navbar(active)
 
-# Robust navbar JS injected via components.v1 (guaranteed execution,
-# same-origin iframe — can access window.parent.document safely).
-components.html("""
-<script>
-(function () {
-    function bindNavbar() {
-        try {
-            var nav = window.parent.document.querySelector('.gst-navbar');
-            if (!nav || nav.dataset.bound === '1') return true;
-            nav.dataset.bound = '1';
+    <script>
+    (function() {{
+        // Resolve the document that actually holds the navbar.
+        // On local Streamlit this is window.parent.document; on Streamlit
+        // Cloud the app is nested deeper inside an iframe, so we walk
+        // upwards until we find a document with our navbar, falling back
+        // to the current document if cross-origin access is blocked.
+        function findNav() {{
+            const candidates = [];
+            try {{ candidates.push(window.top.document); }} catch (e) {{}}
+            try {{ candidates.push(window.parent.document); }} catch (e) {{}}
+            candidates.push(window.document);
 
-            nav.addEventListener('click', function (e) {
-                var link = e.target.closest('a[data-tab]');
-                if (!link) return;
-                e.preventDefault();
-                var tab = link.getAttribute('data-tab');
-                var url = new URL(window.parent.location.href);
+            for (const doc of candidates) {{
+                if (!doc) continue;
+                const found = doc.querySelector('.gst-navbar');
+                if (found) return {{ doc, nav: found }};
+            }}
+            return null;
+        }}
+
+        // Resolve the window we should navigate. Prefer the top-level
+        // window so the URL change actually reflects in the address bar;
+        // fall back to the current window if blocked.
+        function findTargetWindow() {{
+            try {{
+                void window.top.location.href;   // throws on cross-origin
+                return window.top;
+            }} catch (e) {{}}
+            try {{
+                void window.parent.location.href;
+                return window.parent;
+            }} catch (e) {{}}
+            return window;
+        }}
+
+        const result = findNav();
+        if (!result) return;
+        const {{ nav }} = result;
+        if (nav.dataset.bound === '1') return;
+        nav.dataset.bound = '1';
+
+        nav.addEventListener('click', function(e) {{
+            const link = e.target.closest('a[data-tab]');
+            if (!link) return;
+            e.preventDefault();
+            e.stopPropagation();
+
+            const tab = link.dataset.tab;
+            const targetWin = findTargetWindow();
+
+            try {{
+                const url = new URL(targetWin.location.href);
                 url.searchParams.set('tab', tab);
-                window.parent.location.href = url.toString();
-            }, true);
+                targetWin.location.href = url.toString();
+            }} catch (err) {{
+                // Last-resort fallback: let the anchor's target="_top"
+                // attribute handle the navigation natively.
+                window.location.href = link.getAttribute('href');
+            }}
+        }}, true);
+    }})();
+    </script>
+    """, unsafe_allow_html=True)
 
-            return true;
-        } catch (err) {
-            return false;
-        }
-    }
-
-    // Retry until React has painted the navbar (handles async rendering)
-    if (!bindNavbar()) {
-        var attempts = 0;
-        var iv = setInterval(function () {
-            attempts++;
-            if (bindNavbar() || attempts > 40) clearInterval(iv);
-        }, 75);
-    }
-})();
-</script>
-""", height=0)
+render_navbar(active)
 
 # ═══════════════════════════════════════════════════════════════════
 # THEME TOGGLE
