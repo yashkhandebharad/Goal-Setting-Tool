@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
+import streamlit.components.v1 as components
 from io import BytesIO
 from openpyxl.styles import Font, PatternFill, Border, Side, Alignment
 from openpyxl.utils import get_column_letter
@@ -492,6 +493,18 @@ button[data-testid="stBaseButton-primary"]:hover {{
 }}
 
 /* ── NAVBAR ── */
+/* Pin the navbar component iframe to the very top, full width */
+.stApp > div:has(> iframe[title="streamlit_components.v1.html.html"]),
+iframe[title="streamlit_components.v1.html.html"] {{
+    position: fixed !important;
+    top: 0 !important;
+    left: 0 !important;
+    right: 0 !important;
+    width: 100% !important;
+    z-index: 999999 !important;
+    border: none !important;
+}}
+
 .gst-navbar {{
     position: fixed !important;
     top: 0 !important;
@@ -765,14 +778,6 @@ LOGO_DATA_URI = _load_logo_b64()
 
 
 def render_navbar(active_idx: int):
-    tabs_html = "".join(
-        f'<a href="?tab={i}" target="_top" '
-        f'class="gst-tab{" active" if i == active_idx else ""}" '
-        f'data-tab="{i}">'
-        f'<span class="tab-icon">{icon}</span>{name}</a>'
-        for i, (name, icon) in enumerate(TABS)
-    )
-
     if LOGO_DATA_URI:
         brand_inner = f'<img src="{LOGO_DATA_URI}" alt="Company logo" class="brand-logo" />'
     else:
@@ -784,82 +789,89 @@ def render_navbar(active_idx: int):
             '</div>'
         )
 
-    st.markdown(f"""
+    tabs_html = "".join(
+        f'<a href="#" class="gst-tab{" active" if i == active_idx else ""}" '
+        f'data-tab="{i}">'
+        f'<span class="tab-icon">{icon}</span>{name}</a>'
+        for i, (name, icon) in enumerate(TABS)
+    )
+
+    components.html(f"""
+    <style>
+      * {{ margin:0; padding:0; box-sizing:border-box;
+           font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif; }}
+      body {{ background:transparent; overflow:hidden; }}
+
+      .gst-navbar {{
+          position:fixed; top:0; left:0; right:0; width:100%;
+          display:grid; grid-template-columns:1fr auto 1fr;
+          align-items:center; padding:0 4rem;
+          background:#0f172a; border-bottom:1px solid #1e293b;
+          height:76px; box-shadow:0 2px 12px rgba(0,0,0,0.18);
+      }}
+      @media (max-width:1200px) {{ .gst-navbar {{ padding:0 2.5rem; }} }}
+      @media (max-width:768px)  {{ .gst-navbar {{ padding:0 1.25rem; }} }}
+
+      .gst-brand-slot {{ display:flex; justify-content:flex-start; align-items:center; }}
+      .gst-brand {{ display:flex; align-items:center; gap:12px;
+                    text-decoration:none; white-space:nowrap; cursor:pointer; }}
+      .brand-logo {{ height:40px; width:auto; max-width:180px; object-fit:contain; display:block; }}
+      .brand-icon {{ width:38px; height:38px;
+                     background:linear-gradient(135deg,#2563eb,#1d4ed8);
+                     border-radius:10px; display:flex; align-items:center;
+                     justify-content:center; font-size:18px;
+                     box-shadow:0 4px 12px rgba(37,99,235,0.35); flex-shrink:0; }}
+      .brand-text {{ display:flex; flex-direction:column; line-height:1.2; }}
+      .brand-title    {{ color:#f1f5f9; font-size:15px; font-weight:700; letter-spacing:-0.2px; }}
+      .brand-subtitle {{ color:#64748b; font-size:11.5px; font-weight:500; margin-top:1px; }}
+
+      .gst-tabs {{ display:flex; align-items:center; gap:6px; justify-content:center; }}
+      .gst-tab {{ display:inline-flex; align-items:center; gap:8px;
+                  font-size:14px; font-weight:500; padding:9px 18px;
+                  border-radius:9px; white-space:nowrap;
+                  transition:background 0.15s,color 0.15s;
+                  text-decoration:none; color:#94a3b8; cursor:pointer; }}
+      .gst-tab:hover {{ background:#1e293b; color:#e2e8f0; }}
+      .gst-tab.active {{ background:linear-gradient(135deg,#2563eb,#1d4ed8);
+                         color:#ffffff; font-weight:600;
+                         box-shadow:0 4px 14px rgba(37,99,235,0.32); }}
+      .tab-icon {{ font-size:14px; opacity:0.95; }}
+    </style>
+
     <nav class="gst-navbar">
         <div class="gst-brand-slot">
-            <a class="gst-brand" href="?tab=0" target="_top" data-tab="0">
-                {brand_inner}
-            </a>
+            <a class="gst-brand" href="#" data-tab="0">{brand_inner}</a>
         </div>
         <div class="gst-tabs">{tabs_html}</div>
-        <div class="gst-right-slot"></div>
+        <div></div>
     </nav>
 
     <script>
     (function() {{
-        // Resolve the document that actually holds the navbar.
-        // On local Streamlit this is window.parent.document; on Streamlit
-        // Cloud the app is nested deeper inside an iframe, so we walk
-        // upwards until we find a document with our navbar, falling back
-        // to the current document if cross-origin access is blocked.
-        function findNav() {{
-            const candidates = [];
-            try {{ candidates.push(window.top.document); }} catch (e) {{}}
-            try {{ candidates.push(window.parent.document); }} catch (e) {{}}
-            candidates.push(window.document);
-
-            for (const doc of candidates) {{
-                if (!doc) continue;
-                const found = doc.querySelector('.gst-navbar');
-                if (found) return {{ doc, nav: found }};
-            }}
-            return null;
-        }}
-
-        // Resolve the window we should navigate. Prefer the top-level
-        // window so the URL change actually reflects in the address bar;
-        // fall back to the current window if blocked.
-        function findTargetWindow() {{
+        function navigate(tab) {{
+            // window.parent is the Streamlit app document (top-level on Cloud).
             try {{
-                void window.top.location.href;   // throws on cross-origin
-                return window.top;
-            }} catch (e) {{}}
-            try {{
-                void window.parent.location.href;
-                return window.parent;
-            }} catch (e) {{}}
-            return window;
-        }}
-
-        const result = findNav();
-        if (!result) return;
-        const {{ nav }} = result;
-        if (nav.dataset.bound === '1') return;
-        nav.dataset.bound = '1';
-
-        nav.addEventListener('click', function(e) {{
-            const link = e.target.closest('a[data-tab]');
-            if (!link) return;
-            e.preventDefault();
-            e.stopPropagation();
-
-            const tab = link.dataset.tab;
-            const targetWin = findTargetWindow();
-
-            try {{
-                const url = new URL(targetWin.location.href);
+                var url = new URL(window.parent.location.href);
                 url.searchParams.set('tab', tab);
-                targetWin.location.href = url.toString();
-            }} catch (err) {{
-                // Last-resort fallback: let the anchor's target="_top"
-                // attribute handle the navigation natively.
-                window.location.href = link.getAttribute('href');
+                window.parent.location.href = url.toString();
+            }} catch (e) {{
+                try {{
+                    var url2 = new URL(window.top.location.href);
+                    url2.searchParams.set('tab', tab);
+                    window.top.location.href = url2.toString();
+                }} catch (e2) {{}}
             }}
-        }}, true);
+        }}
+        document.querySelectorAll('a[data-tab]').forEach(function(link) {{
+            link.addEventListener('click', function(e) {{
+                e.preventDefault();
+                navigate(this.getAttribute('data-tab'));
+            }});
+        }});
     }})();
     </script>
-    """, unsafe_allow_html=True)
-
+    """, height=76)
+    
 render_navbar(active)
 
 # ═══════════════════════════════════════════════════════════════════
