@@ -189,35 +189,6 @@ button[kind="header"]                          {{ display: none !important; }}
     .block-container {{ padding-left: 1.25rem !important; padding-right: 1.25rem !important; }}
 }}
 
-/* Block-container padding-top scales with navbar height */
-@media (max-width: 768px) {{
-    .block-container {{
-        padding-top: 5rem !important;
-        padding-left: 0.75rem !important;
-        padding-right: 0.75rem !important;
-    }}
-}}
-
-/* Theme toggle: shrink and reposition on small screens */
-@media (max-width: 1200px) {{
-    .st-key-theme_toggle_btn {{ right: 1.5rem !important; }}
-}}
-@media (max-width: 768px) {{
-    .st-key-theme_toggle_btn {{
-        right: 0.75rem !important;
-        top: 13px !important;
-        width: 34px !important;
-        height: 34px !important;
-    }}
-    .st-key-theme_toggle_btn button {{
-        width: 34px !important;
-        height: 34px !important;
-        min-width: 34px !important;
-        min-height: 34px !important;
-        background-size: 16px 16px !important;
-    }}
-}}
-
 /* ── TEXT THEMING ── */
 h1, h2, h3, h4, h5, h6,
 [data-testid="stMarkdownContainer"] h1,
@@ -520,52 +491,54 @@ button[data-testid="stBaseButton-primary"]:hover {{
     color: #ffffff !important;
 }}
 
-/* ── NAVBAR (responsive) ── */
-.gst-navbar {
+/* ── NAVBAR ── */
+.gst-navbar {{
     position: fixed !important;
-    top: 0 !important; left: 0 !important; right: 0 !important;
+    top: 0 !important;
+    left: 0 !important;
+    right: 0 !important;
     z-index: 999999 !important;
     width: 100%;
     display: grid;
-    grid-template-columns: auto 1fr auto;
+    grid-template-columns: 1fr auto 1fr;
     align-items: center;
-    column-gap: 16px;
     padding: 0 4rem;
     background: #0f172a;
     border-bottom: 1px solid #1e293b;
     height: 76px;
     box-shadow: 0 2px 12px rgba(0,0,0,0.18);
-}
+}}
 
-.gst-brand-slot {
-    display: flex;
-    justify-content: flex-start;
-    align-items: center;
-    min-width: 0;
-}
+@media (max-width: 1200px) {{
+    .gst-navbar {{ padding: 0 2.5rem; }}
+}}
+@media (max-width: 768px) {{
+    .gst-navbar {{ padding: 0 1.25rem; }}
+}}
 
-.gst-brand {
+.gst-brand-slot {{ display: flex; justify-content: flex-start; align-items: center; }}
+
+.gst-brand {{
     display: flex;
     align-items: center;
     gap: 12px;
     text-decoration: none !important;
     white-space: nowrap;
-    min-width: 0;
-}
-.gst-brand:hover, .gst-brand:visited, .gst-brand:focus {
+}}
+.gst-brand:hover, .gst-brand:visited, .gst-brand:focus {{
     text-decoration: none !important;
     color: inherit !important;
-}
+}}
 
-.brand-logo {
+.brand-logo {{
     height: 40px;
     width: auto;
     max-width: 180px;
     object-fit: contain;
     display: block;
-}
+}}
 
-.brand-icon {
+.brand-icon {{
     width: 38px;
     height: 38px;
     background: linear-gradient(135deg, #2563eb, #1d4ed8);
@@ -576,39 +549,23 @@ button[data-testid="stBaseButton-primary"]:hover {{
     font-size: 18px;
     box-shadow: 0 4px 12px rgba(37,99,235,0.35);
     flex-shrink: 0;
-}
+}}
 
-.brand-text {
-    display: flex;
-    flex-direction: column;
-    line-height: 1.2;
-    min-width: 0;
-}
-.brand-title    { color: #f1f5f9; font-size: 15px; font-weight: 700; letter-spacing: -0.2px; }
-.brand-subtitle { color: #64748b; font-size: 11.5px; font-weight: 500; margin-top: 1px; }
+.brand-text {{ display: flex; flex-direction: column; line-height: 1.2; }}
+.brand-title    {{ color: #f1f5f9; font-size: 15px; font-weight: 700; letter-spacing: -0.2px; }}
+.brand-subtitle {{ color: #64748b; font-size: 11.5px; font-weight: 500; margin-top: 1px; }}
 
-/* Tab strip — scrolls horizontally as a last-resort fallback */
-.gst-tabs {
+.gst-tabs {{
     display: flex;
     align-items: center;
     gap: 6px;
     justify-content: center;
-    overflow-x: auto;
-    overflow-y: hidden;
-    scrollbar-width: thin;
-    scrollbar-color: #334155 transparent;
-    -webkit-overflow-scrolling: touch;
-    padding: 0 4px;
-}
-.gst-tabs::-webkit-scrollbar { height: 3px; }
-.gst-tabs::-webkit-scrollbar-thumb { background: #334155; border-radius: 4px; }
-.gst-tabs::-webkit-scrollbar-track { background: transparent; }
+}}
 
-.gst-tab {
+.gst-tab {{
     display: inline-flex;
     align-items: center;
     gap: 8px;
-    flex-shrink: 0;
     font-size: 14px;
     font-weight: 500;
     padding: 9px 18px;
@@ -618,69 +575,26 @@ button[data-testid="stBaseButton-primary"]:hover {{
     text-decoration: none !important;
     color: #94a3b8 !important;
     cursor: pointer;
-}
-.gst-tab:hover {
+}}
+.gst-tab:hover {{
     background: #1e293b;
     color: #e2e8f0 !important;
     text-decoration: none !important;
-}
-.gst-tab.active {
+}}
+.gst-tab.active {{
     background: linear-gradient(135deg, #2563eb, #1d4ed8);
     color: #ffffff !important;
     font-weight: 600;
     box-shadow: 0 4px 14px rgba(37,99,235,0.32);
     text-decoration: none !important;
-}
-.tab-icon { font-size: 14px; opacity: 0.95; }
-.tab-label { display: inline; }
+}}
+.tab-icon {{ font-size: 14px; opacity: 0.95; }}
 
-.gst-right-slot {
+.gst-right-slot {{
     display: flex;
     justify-content: flex-end;
     align-items: center;
-}
-
-/* ── 1200px: tighter padding ── */
-@media (max-width: 1200px) {
-    .gst-navbar { padding: 0 2rem; column-gap: 12px; }
-    .gst-tab    { padding: 8px 14px; font-size: 13.5px; }
-}
-
-/* ── 1000px: hide brand subtitle ── */
-@media (max-width: 1000px) {
-    .brand-subtitle { display: none; }
-    .brand-title    { font-size: 14px; }
-    .gst-navbar     { padding: 0 1.5rem; }
-    .gst-tab        { padding: 7px 12px; font-size: 13px; gap: 6px; }
-}
-
-/* ── 768px (mobile): icon-only tabs, hide brand text, shorter navbar ── */
-@media (max-width: 768px) {
-    .gst-navbar {
-        height: 60px;
-        padding: 0 0.75rem;
-        column-gap: 8px;
-    }
-    .brand-text { display: none !important; }
-    .brand-logo { height: 32px; max-width: 120px; }
-    .brand-icon { width: 34px; height: 34px; font-size: 15px; border-radius: 8px; }
-
-    .gst-tabs { justify-content: flex-start; gap: 4px; }
-    .gst-tab {
-        padding: 7px 9px;
-        gap: 0;
-        border-radius: 8px;
-    }
-    .tab-label { display: none; }   /* show only the icon */
-    .tab-icon  { font-size: 18px; }
-}
-
-/* ── Very small (<420px): pack tighter still ── */
-@media (max-width: 420px) {
-    .gst-navbar { padding: 0 0.5rem; column-gap: 4px; }
-    .gst-tab    { padding: 6px 7px; }
-    .tab-icon   { font-size: 17px; }
-}
+}}
 
 /* ── METRIC CARDS ── */
 [data-testid="stMetric"] {{ color: {TEXT_PRIMARY} !important; }}
@@ -854,10 +768,8 @@ def render_navbar(active_idx: int):
     tabs_html = "".join(
         f'<a href="?tab={i}" target="_top" '
         f'class="gst-tab{" active" if i == active_idx else ""}" '
-        f'data-tab="{i}" '
-        f'title="{name}" aria-label="{name}">'
-        f'<span class="tab-icon">{icon}</span>'
-        f'<span class="tab-label">{name}</span></a>'
+        f'data-tab="{i}">'
+        f'<span class="tab-icon">{icon}</span>{name}</a>'
         for i, (name, icon) in enumerate(TABS)
     )
 
