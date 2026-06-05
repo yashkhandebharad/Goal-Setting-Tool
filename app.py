@@ -1,5 +1,4 @@
 import streamlit as st
-import ai_mode
 import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
@@ -26,7 +25,6 @@ TABS = [
     ("National Goal Setting", "🎯"),
     ("Final Allocation",      "📊"),
     ("Back Testing",          "🔁"),
-    ("AI Mode",               "🤖"),   # <-- NEW, index 5, nothing else shifts
 ]
 
 # ═══════════════════════════════════════════════════════════════════
@@ -1508,10 +1506,6 @@ if active == 0:
            below, then click <strong>Start</strong> to begin.</p>
     </div>
     """, unsafe_allow_html=True)
-    
-    chosen = ai_mode.render_mode_cards(manual_tab_idx=1, ai_tab_idx=5)
-    if chosen:
-        go_to_tab(chosen[1])
 
     steps = [
         'Upload the input data in the correct format <em>(template provided on the "Input & Validation" tab).</em>',
@@ -3801,20 +3795,3 @@ elif active == 4:
     if st.button("← Back to Final Allocation", key="bt_back",
                  use_container_width=False):
         go_to_tab(3)
-
-# ═══════════════════════════════════════════════════════════════════
-# TAB 5 — AI MODE
-# ═══════════════════════════════════════════════════════════════════
-elif active == 5:
-    ai_mode.render(
-        compute_weighted_model   = compute_weighted_model,
-        compute_fair_share       = compute_fair_share,
-        compute_equal_allocation = compute_equal_allocation,
-        compute_back_test        = compute_back_test,
-        preprocess               = preprocess,
-        validate_schema          = validate_schema,
-        apply_date_filter        = apply_date_filter,
-        to_excel                 = to_excel,
-        REQUIRED_COLUMNS         = REQUIRED_COLUMNS,
-        theme_vars               = dict(is_dark=is_dark),
-    )
