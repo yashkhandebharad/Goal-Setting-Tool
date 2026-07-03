@@ -3329,7 +3329,7 @@ elif active == 3:
         st.info(f"Finished **{gs_product}**. Set goals for another product?")
         w_l, w_r = st.columns(2)
         with w_l:
-            if st.button("Yes — next product →", type="primary", use_container_width=True):
+            if st.button("Yes", type="primary", use_container_width=True):
                 st.session_state.gs_completed = completed
                 st.session_state.gs_product = None      # forces the picker again
                 for k in ("nation_goal", "weighted_result_df", "chosen_params",
@@ -3342,7 +3342,7 @@ elif active == 3:
                 st.session_state.chosen_params_src = None
                 go_to_tab(2)
         with w_r:
-            if st.button("No — back to Instructions", use_container_width=True):
+            if st.button("No", use_container_width=True):
                 st.session_state.gs_completed = completed
                 go_to_tab(0)
     else:
