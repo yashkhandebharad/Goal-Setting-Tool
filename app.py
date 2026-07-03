@@ -48,7 +48,18 @@ _defaults = {
     "selected_model_label": None,
     "theme": "dark",
     "uploaded_filename": None, "uploaded_filesize": None,
+    "selected_products": None,
+    "null_fixed_idx": [],
+    "gs_product": None,          # product currently being goal-set
+    "gs_completed": [],          # products whose Final Allocation is done
+    "bt_intro_seen": False,      # Back Testing intro acknowledged
+    "bt_mode": None,             # "manual" | "optimizer"
+    "opt_results_df": None,      # grid-search ranking table
+    "opt_best_params": None,     # best params from optimizer
+    "chosen_params": None,       # params carried into Final Allocation
+    "chosen_params_src": None,   # "manual" | "optimizer"
 }
+
 for k, v in _defaults.items():
     if k not in st.session_state:
         st.session_state[k] = v
@@ -912,6 +923,73 @@ def apply_date_filter(df, start, end):
         (df["Week"] >= pd.to_datetime(start)) &
         (df["Week"] <= pd.to_datetime(end))
     ].copy()
+    
+def apply_product_filter(df, products):
+    """Keep only rows whose Product is in `products`. Empty/None → return all."""
+    if not products:
+        return df.copy()
+    return df[df["Product"].isin(products)].copy()
+
+
+def product_wise_zscores(df):
+    """Absolute z-scores of Sales computed WITHIN each Product group."""
+    def _z(s):
+        sd = s.std()
+        if not sd or np.isnan(sd) or sd == 0:
+            return pd.Series(np.zeros(len(s)), index=s.index)
+        return np.abs((s - s.mean()) / sd)
+    if df.empty:
+        return pd.Series(dtype=float)
+    return df.groupby("Product")["Sales"].transform(_z)
+
+
+def fill_missing_product_wise(full_df, products, method):
+    """
+    Fill missing Sales/Goals for the given products, PRODUCT-WISE.
+    Mean/Median/Mode use each product's own values only. Previous/Next
+    use week-ordered ffill/bfill within each product.
+    """
+    df   = full_df.copy()
+    mask = df["Product"].isin(products)
+    cols = ["Sales", "Goals"]
+
+    if method == "Fill with 0":
+        df.loc[mask, cols] = df.loc[mask, cols].fillna(0)
+        return df
+
+    for col in cols:
+        sub = df.loc[mask]
+        if method == "Fill with Mean":
+            filled = sub.groupby("Product")[col].transform(lambda s: s.fillna(s.mean()))
+        elif method == "Fill with Median":
+            filled = sub.groupby("Product")[col].transform(lambda s: s.fillna(s.median()))
+        elif method == "Fill with Mode":
+            filled = sub.groupby("Product")[col].transform(
+                lambda s: s.fillna(s.mode().iloc[0]) if not s.mode().empty else s)
+        elif method == "Fill using Previous Value":
+            filled = sub.sort_values("Week").groupby("Product")[col].ffill()
+        elif method == "Fill using Next Value":
+            filled = sub.sort_values("Week").groupby("Product")[col].bfill()
+        else:
+            filled = df.loc[mask, col]
+        df.loc[filled.index, col] = filled
+    return df
+
+
+def cap_outliers_product_wise(full_df, products):
+    """Cap Sales at each product's own +3σ, only for the selected products."""
+    df = full_df.copy()
+    n_capped = 0
+    for prod in products:
+        m  = df["Product"] == prod
+        s  = df.loc[m, "Sales"]
+        sd = s.std()
+        if not sd or np.isnan(sd) or sd == 0:
+            continue
+        cap = s.mean() + 3 * sd
+        n_capped += int((s > cap).sum())
+        df.loc[m, "Sales"] = s.clip(upper=cap)
+    return df, n_capped
 
 def fmt(n, prefix="$"):
     return "—" if pd.isna(n) else f"{prefix}{n:,.0f}"
@@ -1061,15 +1139,20 @@ def to_excel(df, sheet_name="Sheet1", percent_cols=None, currency_cols=None,
 
 def plot_trend(df, level):
     freq_map = {"Weekly": "W", "Monthly": "ME", "Quarterly": "QE"}
+    per_map  = {"Weekly": "W", "Monthly": "M",  "Quarterly": "Q"}
+    d = df.copy()
+    d["Week"] = pd.to_datetime(d["Week"])
+    data_max = d["Week"].max()
     agg = (
-        df.copy()
-        .assign(Week=lambda d: pd.to_datetime(d["Week"]))
-        .sort_values("Week")
-        .set_index("Week")[["Sales", "Goals"]]
-        .resample(freq_map[level])
-        .sum()
-        .reset_index()
+        d.sort_values("Week")
+         .set_index("Week")[["Sales", "Goals"]]
+         .resample(freq_map[level])
+         .sum()
+         .reset_index()
     )
+    # Drop any bin whose period is AFTER the last real data point
+    # (kills spurious future labels like "Jan 2025" when data ends Dec 2024).
+    agg = agg[agg["Week"].dt.to_period(per_map[level]) <= data_max.to_period(per_map[level])]
 
     axis_color   = "#f1f5f9" if is_dark else "#0f172a"
     grid_color   = "#1f2937" if is_dark else "#e2e8f0"
@@ -1093,6 +1176,7 @@ def plot_trend(df, level):
         line=dict(color="#f97316", width=3, dash="dash"), marker=dict(size=6),
         hovertemplate="Goals: %{y:,.0f}<extra></extra>",
     ))
+    x_range = [agg["Week"].min(), agg["Week"].max()] if not agg.empty else None
     fig.update_layout(
         template="plotly_dark" if is_dark else "plotly_white",
         paper_bgcolor="rgba(0,0,0,0)",
@@ -1103,6 +1187,7 @@ def plot_trend(df, level):
                     font=dict(color=axis_color)),
         xaxis=dict(
             showgrid=False, color=axis_color,
+            range=x_range,                       # ← pins axis to real data
             title=dict(text=x_title,
                        font=dict(color=axis_color, size=14, family="Calibri"),
                        standoff=12),
@@ -1118,11 +1203,8 @@ def plot_trend(df, level):
             gridcolor=grid_color, linecolor=grid_color,
         ),
         font=dict(color=axis_color),
-        hoverlabel=dict(
-            bgcolor=tooltip_bg,
-            bordercolor=tooltip_brd,
-            font=dict(color=tooltip_fg, size=12),
-        ),
+        hoverlabel=dict(bgcolor=tooltip_bg, bordercolor=tooltip_brd,
+                        font=dict(color=tooltip_fg, size=12)),
     )
     return fig
 
@@ -1526,6 +1608,152 @@ def compute_back_test(df, test_quarter, prior_quarter, params):
     return out.sort_values("Actual_Sales", ascending=False).reset_index(drop=True), metrics, sim_summary
 
 # ═══════════════════════════════════════════════════════════════════
+# GRID SEARCH OPTIMIZER ENGINE
+# ═══════════════════════════════════════════════════════════════════
+
+def optimizer_metrics(out, params):
+    """Full metric suite for one quarter's back-test result (`out` from compute_back_test)."""
+    actual = out["Actual_Sales"].to_numpy(dtype=float)
+    goal   = out["Simulated_Goal"].to_numpy(dtype=float)
+    grow   = out["Simulated_Growth"].to_numpy(dtype=float)
+    err     = goal - actual
+    abs_err = np.abs(err)
+    tot_actual = actual.sum()
+    n = len(actual)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        ape = np.where(actual > 0, abs_err / actual, np.nan)
+    mean_actual = actual.mean() if n else np.nan
+    wmape  = abs_err.sum() / tot_actual if tot_actual else np.nan
+    mae    = abs_err.mean() if n else np.nan
+    rmse   = float(np.sqrt((err ** 2).mean())) if n else np.nan
+    mape   = float(np.nanmean(ape)) if n else np.nan
+    medape = float(np.nanmedian(ape)) if n else np.nan
+    within = float(np.nanmean((ape <= 0.10).astype(float))) if n else np.nan
+    outside = 1 - within if within == within else np.nan
+    if n > 1 and goal.std() > 0 and actual.std() > 0:
+        corr = float(np.corrcoef(goal, actual)[0, 1])
+    else:
+        corr = np.nan
+    bias = (goal.sum() - actual.sum()) / tot_actual if tot_actual else np.nan
+    cap, floor = params["growth_cap"], params["growth_floor"]
+    hit = float(np.mean((grow >= cap - 1e-6) | (grow <= floor + 1e-6))) if n else np.nan
+    nrmse = rmse / mean_actual if mean_actual else np.nan
+    # Composite (lower = better) — governance weights:
+    composite = (0.50 * wmape + 0.20 * medape + 0.15 * nrmse +
+                 0.10 * outside + 0.05 * hit)
+    return {"wmape": wmape, "mae": mae, "rmse": rmse, "mape": mape, "median_ape": medape,
+            "pct_within_tol": within, "correlation": corr, "bias": bias,
+            "cap_floor_hit_rate": hit, "nrmse": nrmse, "composite": composite}
+
+
+def evaluate_params_multi_quarter(df, quarter_pairs, params):
+    """Back test each (test_q, prior_q) pair; aggregate into a multi-quarter stability score."""
+    per_q = []
+    for test_q, prior_q in quarter_pairs:
+        out, _m, _s = compute_back_test(df, test_q, prior_q, params)
+        if out.empty:
+            continue
+        met = optimizer_metrics(out, params)
+        met["test_quarter"] = str(test_q)
+        per_q.append(met)
+    if not per_q:
+        return None
+    comp  = np.array([p["composite"] for p in per_q], dtype=float)
+    wmape = np.array([p["wmape"]     for p in per_q], dtype=float)
+    # Stability penalises combos that win one quarter but swing across others:
+    stability = float(np.nanmean(comp) + 0.25 * np.nanstd(wmape))
+    return {"avg_composite":    float(np.nanmean(comp)),
+            "std_wmape":        float(np.nanstd(wmape)),
+            "stability_score":  stability,
+            "avg_wmape":        float(np.nanmean(wmape)),
+            "avg_mape":         float(np.nanmean([p["mape"]            for p in per_q])),
+            "avg_median_ape":   float(np.nanmean([p["median_ape"]     for p in per_q])),
+            "avg_rmse":         float(np.nanmean([p["rmse"]           for p in per_q])),
+            "avg_within_tol":   float(np.nanmean([p["pct_within_tol"] for p in per_q])),
+            "avg_bias":         float(np.nanmean([p["bias"]           for p in per_q])),
+            "avg_cap_floor_hit":float(np.nanmean([p["cap_floor_hit_rate"] for p in per_q])),
+            "n_quarters":       len(per_q)}
+
+
+def _frange(lo, hi, step):
+    """Inclusive float range, drift-safe."""
+    if step <= 0:
+        return [round(lo, 6)]
+    n = int(round((hi - lo) / step)) + 1
+    return [round(lo + i * step, 6) for i in range(max(n, 1))]
+
+
+def build_quarter_pairs(quarters, max_quarters=4):
+    """Consecutive (test, prior) pairs, most recent first, capped to max_quarters."""
+    pairs = [(quarters[i], quarters[i - 1]) for i in range(len(quarters) - 1, 0, -1)]
+    return pairs[:max_quarters]
+
+
+def grid_search(df, quarter_pairs, base_params, ranges, progress_cb=None, refine=True):
+    """
+    ranges: dict of lists for mr_weight(%), vol_balance(%), growth_floor(%), growth_cap(%).
+    Coarse pass over `ranges`, then optional fine ±1% pass around the best.
+    Returns (results_df sorted by stability_score asc, best_params dict).
+    """
+    def combos(rng):
+        out = []
+        for w in rng["mr_weight"]:
+            for v in rng["vol_balance"]:
+                for f in rng["growth_floor"]:
+                    for c in rng["growth_cap"]:
+                        if f > c:                       # floor can't exceed cap
+                            continue
+                        out.append((w, v, f, c))
+        return out
+
+    def run(combo_list):
+        rows, total = [], len(combo_list)
+        for i, (w, v, f, c) in enumerate(combo_list):
+            p = dict(base_params)
+            p.update({"mr_weight": w / 100.0, "p_weight": 1 - w / 100.0,
+                      "vol_balance": v / 100.0,
+                      "growth_floor": f / 100.0, "growth_cap": c / 100.0})
+            agg = evaluate_params_multi_quarter(df, quarter_pairs, p)
+            if agg is not None:
+                rows.append({"mr_weight_%": w, "vol_balance_%": v,
+                             "growth_floor_%": f, "growth_cap_%": c, **agg})
+            if progress_cb:
+                progress_cb(i + 1, total)
+        return rows
+
+    coarse = run(combos(ranges))
+    if not coarse:
+        return pd.DataFrame(), None
+    df_res = pd.DataFrame(coarse).sort_values("stability_score").reset_index(drop=True)
+    best = df_res.iloc[0]
+
+    if refine:
+        def around(center, step, lo, hi):
+            vals = sorted({round(center + d, 6) for d in (-step, 0, step)})
+            return [x for x in vals if lo <= x <= hi]
+        fine_rng = {
+            "mr_weight":    around(best["mr_weight_%"],    1, 0, 100),
+            "vol_balance":  around(best["vol_balance_%"],  1, 0, 20),
+            "growth_floor": around(best["growth_floor_%"], 1, -50, 50),
+            "growth_cap":   around(best["growth_cap_%"],   1, 0, 100),
+        }
+        fine = run(combos(fine_rng))
+        if fine:
+            df_res = (pd.concat([df_res, pd.DataFrame(fine)], ignore_index=True)
+                      .drop_duplicates(subset=["mr_weight_%", "vol_balance_%",
+                                               "growth_floor_%", "growth_cap_%"])
+                      .sort_values("stability_score").reset_index(drop=True))
+            best = df_res.iloc[0]
+
+    best_params = dict(base_params)
+    best_params.update({"mr_weight": best["mr_weight_%"] / 100.0,
+                        "p_weight": 1 - best["mr_weight_%"] / 100.0,
+                        "vol_balance": best["vol_balance_%"] / 100.0,
+                        "growth_floor": best["growth_floor_%"] / 100.0,
+                        "growth_cap": best["growth_cap_%"] / 100.0})
+    return df_res, best_params
+
+# ═══════════════════════════════════════════════════════════════════
 # METRIC CARD PRESETS
 # ═══════════════════════════════════════════════════════════════════
 if is_dark:
@@ -1617,6 +1845,7 @@ elif active == 1:
 
     st.divider()
 
+    # ── DATE RANGE FILTER ────────────────────────────────────────
     st.subheader("Date Range Filter")
     min_d, max_d = data["Week"].min().date(), data["Week"].max().date()
     dc1, dc2 = st.columns(2)
@@ -1627,20 +1856,87 @@ elif active == 1:
         st.error("Start date must be before end date.")
         st.stop()
 
-    filtered = apply_date_filter(data, start, end)
-    st.session_state.filtered_data = filtered.copy()
-    st.success(
-        f"✅ **{len(filtered):,} rows** in scope — "
-        f"{start.strftime('%d %b %Y')} → {end.strftime('%d %b %Y')}"
-    )
+    date_filtered = apply_date_filter(data, start, end)
 
     st.divider()
 
+    # ── PRODUCT SELECTION ────────────────────────────────────────
+    st.subheader("Product Selection")
+    st.caption("Pick which product(s) to analyse. Everything below — data quality, summary, "
+               "and downloads — respects this selection and the date range above.")
+
+    all_products = sorted(data["Product"].dropna().astype(str).unique().tolist())
+
+    with st.expander("🧪 Select Product(s)", expanded=True):
+        select_all = st.checkbox("✅ All Products (Select All)", value=True,
+                                 key="prod_select_all")
+
+        chosen = []
+        n_cols = 3
+        cols = st.columns(n_cols)
+        for i, prod in enumerate(all_products):
+            with cols[i % n_cols]:
+                checked = st.checkbox(prod, value=select_all,
+                                      key=f"prod_cb_{i}", disabled=select_all)
+                if checked:
+                    chosen.append(prod)
+
+        if select_all:
+            selected_products = all_products
+        else:
+            selected_products = chosen if chosen else all_products
+            if not chosen:
+                st.warning("No product ticked — showing **all products** until you pick at least one.")
+
+    st.session_state.selected_products = selected_products
+
+    # Apply BOTH date + product filters → working scope for the rest of the page
+    filtered = apply_product_filter(date_filtered, selected_products)
+    st.session_state.filtered_data = filtered.copy()
+
+    prod_label = "All products" if select_all else ", ".join(selected_products)
+    st.success(
+        f"✅ **{len(filtered):,} rows** in scope — {prod_label} · "
+        f"{start.strftime('%d %b %Y')} → {end.strftime('%d %b %Y')}"
+    )
+
+    # ── PRODUCT STATISTICS ───────────────────────────────────────
+    st.subheader("Product Statistics")
+    st.caption("Per-product and combined — within the selected date range.")
+
+    def _prod_stats_block(d):
+        if d.empty:
+            st.info("No rows for this selection.")
+            return
+        ts, tg = d["Sales"].sum(), d["Goals"].sum()
+        att = (ts / tg * 100) if tg > 0 else 0
+        a1, a2, a3 = st.columns(3)
+        a1.metric("Average Sales", fmt(d["Sales"].mean()))
+        a2.metric("Maximum Sales", fmt(d["Sales"].max()))
+        a3.metric("Minimum Sales", fmt(d["Sales"].min()))
+        b1, b2, b3 = st.columns(3)
+        b1.metric("Total Sales", fmt(ts))
+        b2.metric("Total Goals", fmt(tg))
+        b3.metric("Attainment",  f"{att:.1f}%")
+        style_metric_cards(**DARK_CARDS)
+
+    if len(selected_products) > 1:
+        stat_scope = st.radio("Statistics for",
+                              ["Combined"] + selected_products,
+                              horizontal=True, key="prod_stat_scope")
+        if stat_scope == "Combined":
+            _prod_stats_block(filtered)
+        else:
+            _prod_stats_block(filtered[filtered["Product"] == stat_scope])
+    else:
+        _prod_stats_block(filtered)
+
+    # ── DATA QUALITY ─────────────────────────────────────────────
     st.subheader("Data Quality")
     st.markdown(
         "Below are three checks for data integrity — **missing values**, **duplicate rows**, "
-        "and **statistical outliers**. Each check shows you the affected rows and lets you "
-        "choose an action. The fix is only applied when you click **Apply Fix**."
+        "and **statistical outliers** — all computed on the selected product(s) and date range. "
+        "The fix is only applied when you click **Apply Fix**."
     )
     work = filtered.copy()
 
@@ -1649,24 +1945,13 @@ elif active == 1:
     dup_df   = work[work.duplicated()]
     dup_cnt  = len(dup_df)
 
-    std = work["Sales"].std()
-    z_scores = (
-        np.abs((work["Sales"] - work["Sales"].mean()) / std)
-        if std and not np.isnan(std) and std != 0
-        else pd.Series(np.zeros(len(work)), index=work.index)
-    )
-    out_cnt = int((z_scores > 3).sum())
+    # Product-wise outlier z-scores (each row vs its OWN product's mean/std)
+    z_scores = product_wise_zscores(work)
+    out_cnt  = int((z_scores > 3).sum()) if not z_scores.empty else 0
 
     # ── Size-aware data quality score ─────────────────────────────
-    # Old logic deducted 1 point per null, 2 per duplicate, 1 per outlier —
-    # which made the score collapse to 0 on any moderately large dataset.
-    # New logic deducts based on the *percentage* of affected rows:
-    #   • Missing values  → up to 40 points (40% weight)
-    #   • Duplicate rows  → up to 30 points (30% weight)
-    #   • Outliers (>3σ)  → up to 30 points (30% weight)
-    # A dataset with 0 issues = 100. A dataset that is 100% bad = 0.
     total_rows = max(len(work), 1)
-    null_rows  = int(work.isnull().any(axis=1).sum())   # # of rows with ≥1 null
+    null_rows  = int(work.isnull().any(axis=1).sum())
     null_pct   = null_rows / total_rows
     dup_pct    = dup_cnt   / total_rows
     out_pct    = out_cnt   / total_rows
@@ -1688,7 +1973,6 @@ elif active == 1:
     style_metric_cards(**LIGHT_CARDS)
     st.progress(score / 100)
 
-    # ── chart theme colors (reused by outlier plot below) ────────
     qc_axis_color  = "#f1f5f9" if is_dark else "#0f172a"
     qc_grid_color  = "#1f2937" if is_dark else "#e2e8f0"
     qc_tooltip_bg  = "#1e293b" if is_dark else "#ffffff"
@@ -1696,57 +1980,85 @@ elif active == 1:
     qc_tooltip_brd = "#334155" if is_dark else "#cbd5e1"
 
     # ════════════════════════════════════════════════════════════
-    # MISSING VALUES
+    # MISSING VALUES (product-wise fill + manual edit + preview)
     # ════════════════════════════════════════════════════════════
     if null_cnt > 0:
         with st.expander(f"🔧 Fix {null_cnt} missing value row(s)", expanded=True):
             st.markdown(
-                f"**{null_cnt}** row(s) have at least one missing value. Choose how to "
-                "handle them — the change is only applied when you click **Apply Fix**."
+                f"**{null_cnt}** row(s) have at least one missing value. **Mean / Median / Mode "
+                "are calculated per product** — each product's gaps are filled using only that "
+                "product's own values."
             )
 
             st.markdown("**Affected rows (preview):**")
             st.dataframe(null_df.head(20), use_container_width=True, hide_index=True)
 
             null_action_help = {
-                "Do Nothing":      "Keep the rows exactly as they are. No changes made.",
-                "Fill with 0":     "Replace every missing value with `0`.",
-                "Fill with Mean":  "Replace missing Sales / Goals values with the column average.",
-                "Remove Rows":     "Drop any row that has at least one missing value.",
+                "Do Nothing":                "Keep the rows exactly as they are.",
+                "Fill with 0":               "Replace every missing value with 0.",
+                "Fill with Mean":            "Fill missing Sales/Goals with that product's average.",
+                "Fill with Median":          "Fill missing Sales/Goals with that product's median.",
+                "Fill with Mode":            "Fill missing Sales/Goals with that product's most frequent value.",
+                "Fill using Previous Value": "Carry the previous (earlier-week) value forward, per product.",
+                "Fill using Next Value":     "Carry the next (later-week) value backward, per product.",
+                "Remove Rows":               "Drop any row (in scope) that has a missing value.",
             }
-            action = st.radio(
-                "Action",
-                list(null_action_help.keys()),
-                key="null_act", horizontal=True,
-            )
+            action = st.radio("Action", list(null_action_help.keys()),
+                              key="null_act", horizontal=True)
             st.caption(null_action_help[action])
+
+            # ── Manual editing when fewer than 10 missing rows ──
+            manual_edit = False
+            edited_rows = None
+            if null_cnt < 10:
+                manual_edit = st.checkbox(
+                    "✏️ Edit these values manually instead",
+                    key="null_manual",
+                    help="Because there are fewer than 10 missing rows, you can type the "
+                         "correct Sales / Goals values directly.")
+                if manual_edit:
+                    st.caption("Edit the Sales / Goals cells below, then click **Apply Fix**.")
+                    edited_rows = st.data_editor(
+                        null_df.copy(),
+                        use_container_width=True, hide_index=False,
+                        key="null_editor",
+                        disabled=["Week", "Territory ID", "Territory Name", "Product"],
+                    )
 
             if st.button("Apply Fix", key="null_apply", type="primary"):
                 full = st.session_state.data.copy()
-                if action == "Fill with 0":
-                    full = full.fillna(0)
-                elif action == "Fill with Mean":
-                    full["Sales"] = full["Sales"].fillna(full["Sales"].mean())
-                    full["Goals"] = full["Goals"].fillna(full["Goals"].mean())
+
+                if manual_edit and edited_rows is not None:
+                    full.loc[edited_rows.index, ["Sales", "Goals"]] = \
+                        edited_rows[["Sales", "Goals"]]
+                    msg = "✅ Missing values updated manually."
                 elif action == "Remove Rows":
-                    full = full.dropna()
-                # else "Do Nothing" — no change
-                st.session_state.data        = full
-                st.session_state.action_type = "missing"
-                st.session_state.action_msg  = (
-                    f"✅ Missing values handled — action applied: **{action}**."
-                    if action != "Do Nothing"
-                    else "ℹ️ No changes applied (you chose *Do Nothing*)."
-                )
+                    drop_idx = null_df.index  # only in-scope null rows
+                    full = full.drop(index=drop_idx)
+                    msg = f"✅ {len(drop_idx):,} row(s) with missing values removed."
+                elif action == "Do Nothing":
+                    msg = "ℹ️ No changes applied (you chose *Do Nothing*)."
+                else:
+                    full = fill_missing_product_wise(full, selected_products, action)
+                    msg = f"✅ Missing values handled — **{action}** (per product)."
+
+                st.session_state.null_fixed_idx = null_df.index.tolist()
+                st.session_state.data           = full
+                st.session_state.action_type    = "missing"
+                st.session_state.action_msg     = msg
                 st.rerun()
 
     elif st.session_state.action_type == "missing":
         st.success(st.session_state.action_msg or "✅ Missing values resolved.")
-        with st.expander("✅ View updated data preview (after fix)", expanded=False):
-            updated = apply_date_filter(st.session_state.data, start, end)
-            st.caption(f"Showing first 20 rows of the **updated** dataset "
-                       f"({len(updated):,} rows total in scope).")
-            st.dataframe(updated.head(20), use_container_width=True, hide_index=True)
+        fixed_idx = st.session_state.get("null_fixed_idx", [])
+        with st.expander("🔍 Preview — previously-missing rows after fix", expanded=True):
+            avail = [i for i in fixed_idx if i in st.session_state.data.index]
+            if avail:
+                st.caption("These rows had missing values — now showing their updated values.")
+                st.dataframe(st.session_state.data.loc[avail].head(20),
+                             use_container_width=True)
+            else:
+                st.caption("Those rows were removed from the dataset.")
         st.session_state.action_type = None
     else:
         st.success("✅ No missing values found.")
@@ -1757,86 +2069,96 @@ elif active == 1:
     if dup_cnt > 0:
         with st.expander(f"🔧 Fix {dup_cnt} duplicate row(s)", expanded=True):
             st.markdown(
-                f"**{dup_cnt}** row(s) appear more than once in the dataset. "
-                "Duplicate rows can inflate totals and skew calculations — removing them is "
-                "almost always the right choice."
+                f"**{dup_cnt}** row(s) appear more than once. Duplicate rows inflate totals — "
+                "removing them is almost always correct."
             )
-
             st.markdown("**Duplicate rows (preview):**")
             st.dataframe(dup_df.head(20), use_container_width=True, hide_index=True)
-            st.caption(
-                "Note: only second-and-later occurrences are shown. The first occurrence "
-                "of each duplicate group is kept when you apply the fix."
-            )
+            st.caption("Only second-and-later occurrences are shown. The first occurrence is kept.")
 
             if st.button("Apply Fix — Remove Duplicates", key="dup_apply", type="primary"):
-                full = st.session_state.data.drop_duplicates()
+                full    = st.session_state.data.drop_duplicates()
                 removed = len(st.session_state.data) - len(full)
                 st.session_state.data        = full
                 st.session_state.action_type = "duplicate"
-                st.session_state.action_msg  = (
-                    f"✅ {removed:,} duplicate row(s) removed successfully."
-                )
+                st.session_state.action_msg  = f"✅ {removed:,} duplicate row(s) removed successfully."
                 st.rerun()
 
     elif st.session_state.action_type == "duplicate":
         st.success(st.session_state.action_msg or "✅ Duplicates removed successfully.")
         with st.expander("✅ View updated data preview (after fix)", expanded=False):
-            updated = apply_date_filter(st.session_state.data, start, end)
+            updated = apply_product_filter(
+                apply_date_filter(st.session_state.data, start, end), selected_products)
             st.caption(f"Showing first 20 rows of the **updated** dataset "
-                       f"({len(updated):,} rows total in scope).")
+                       f"({len(updated):,} rows in scope).")
             st.dataframe(updated.head(20), use_container_width=True, hide_index=True)
         st.session_state.action_type = None
     else:
         st.success("✅ No duplicate rows found.")
 
     # ════════════════════════════════════════════════════════════
-    # OUTLIERS
+    # OUTLIERS (product-wise + scope radio)
     # ════════════════════════════════════════════════════════════
     if out_cnt > 0:
         with st.expander(f"🔧 Review {out_cnt} outlier row(s)", expanded=True):
             st.markdown(
-                f"**{out_cnt}** sales values are statistical outliers — they sit more than "
-                "**3 standard deviations** away from the mean. Outliers can be either "
-                "legitimate (a big customer order, a launch month) or data-entry errors. "
-                "Review them before deciding what to do."
+                f"**{out_cnt}** sales values are statistical outliers — more than **3 standard "
+                "deviations** from their **product's** mean. Outliers can be legitimate "
+                "(a big order, a launch month) or data-entry errors."
             )
 
-            sales_mean = work["Sales"].mean()
-            sales_std  = work["Sales"].std()
+            # Radio only when more than one product is selected
+            if len(selected_products) > 1:
+                out_scope = st.radio("Show outliers for",
+                                     ["All"] + selected_products,
+                                     horizontal=True, key="out_scope")
+            else:
+                out_scope = "All"
+
+            if out_scope == "All":
+                scope_df = work.copy()
+            else:
+                scope_df = work[work["Product"] == out_scope].copy()
+
+            scope_z   = product_wise_zscores(scope_df)
+            scope_out = scope_df[scope_z > 3].copy()
+            scope_out_cnt = len(scope_out)
+
+            sales_mean = scope_df["Sales"].mean()
+            sales_std  = scope_df["Sales"].std()
             upper_cap  = sales_mean + 3 * sales_std
             lower_cap  = sales_mean - 3 * sales_std
 
-            # ── Stats row ───────────────────────────────────────
             os1, os2, os3, os4 = st.columns(4)
             os1.metric("Mean Sales",        fmt(sales_mean))
             os2.metric("Std Dev",           fmt(sales_std))
             os3.metric("Upper Bound (+3σ)", fmt(upper_cap))
-            os4.metric("Outlier Rows",      f"{out_cnt:,}")
+            os4.metric("Outlier Rows",      f"{scope_out_cnt:,}")
 
-            # ── Outlier visualization (scatter: index vs Sales) ──
+            single_scope = (out_scope != "All") or (len(selected_products) == 1)
+
             st.markdown("**Outlier distribution chart**")
             st.caption(
-                "Every dot is a row from your dataset. The red dots are flagged as outliers "
-                "(beyond ±3σ). The dashed line is the upper bound — values above it will be "
-                "capped if you choose *Cap at 3 Std Dev*."
+                "Each dot is a row. Red diamonds are flagged outliers (beyond ±3σ within their "
+                "product)." + (" The dashed line is the +3σ bound." if single_scope else
+                "")
             )
 
-            chart_df = work.reset_index(drop=True).copy()
+            chart_df = scope_df.reset_index(drop=True).copy()
             chart_df["row_idx"]    = chart_df.index
-            chart_df["is_outlier"] = z_scores.reset_index(drop=True) > 3
+            chart_df["is_outlier"] = (scope_z.reset_index(drop=True) > 3)
             chart_df["label"]      = (chart_df["Territory Name"].astype(str) + " · " +
+                                       chart_df["Product"].astype(str) + " · " +
                                        chart_df["Week"].dt.strftime("%Y-%m-%d"))
 
-            normal_pts = chart_df[~chart_df["is_outlier"]]
+            normal_pts  = chart_df[~chart_df["is_outlier"]]
             outlier_pts = chart_df[chart_df["is_outlier"]]
 
             fig_out = go.Figure()
             fig_out.add_trace(go.Scatter(
                 x=normal_pts["row_idx"], y=normal_pts["Sales"],
                 mode="markers", name="Normal",
-                marker=dict(size=5, color="#2563eb", opacity=0.55,
-                            line=dict(width=0)),
+                marker=dict(size=5, color="#2563eb", opacity=0.55, line=dict(width=0)),
                 customdata=normal_pts["label"],
                 hovertemplate="<b>%{customdata}</b><br>Sales: %{y:,.0f}<extra></extra>",
             ))
@@ -1849,78 +2171,66 @@ elif active == 1:
                 customdata=outlier_pts["label"],
                 hovertemplate="<b>%{customdata}</b><br>Sales: %{y:,.0f} ⚠️<extra></extra>",
             ))
-            fig_out.add_hline(y=upper_cap, line_dash="dash", line_color="#f97316",
-                              line_width=1.5,
-                              annotation_text=f"+3σ ({upper_cap:,.0f})",
-                              annotation_position="top right",
-                              annotation_font_color=qc_axis_color)
-            fig_out.add_hline(y=sales_mean, line_dash="dot", line_color="#64748b",
-                              line_width=1,
-                              annotation_text=f"Mean ({sales_mean:,.0f})",
-                              annotation_position="top left",
-                              annotation_font_color=qc_axis_color)
-            if lower_cap > 0:
-                fig_out.add_hline(y=lower_cap, line_dash="dash", line_color="#f97316",
+            if single_scope:
+                fig_out.add_hline(y=upper_cap, line_dash="dash", line_color="#f97316",
                                   line_width=1.5,
-                                  annotation_text=f"−3σ ({lower_cap:,.0f})",
-                                  annotation_position="bottom right",
+                                  annotation_text=f"+3σ ({upper_cap:,.0f})",
+                                  annotation_position="top right",
                                   annotation_font_color=qc_axis_color)
+                fig_out.add_hline(y=sales_mean, line_dash="dot", line_color="#64748b",
+                                  line_width=1,
+                                  annotation_text=f"Mean ({sales_mean:,.0f})",
+                                  annotation_position="top left",
+                                  annotation_font_color=qc_axis_color)
+                if lower_cap > 0:
+                    fig_out.add_hline(y=lower_cap, line_dash="dash", line_color="#f97316",
+                                      line_width=1.5,
+                                      annotation_text=f"−3σ ({lower_cap:,.0f})",
+                                      annotation_position="bottom right",
+                                      annotation_font_color=qc_axis_color)
             fig_out.update_layout(
                 template="plotly_dark" if is_dark else "plotly_white",
-                paper_bgcolor="rgba(0,0,0,0)",
-                plot_bgcolor="rgba(0,0,0,0)",
-                height=380,
-                margin=dict(l=70, r=20, t=30, b=70),
+                paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+                height=380, margin=dict(l=70, r=20, t=30, b=70),
                 legend=dict(orientation="h", y=1.08, x=1, xanchor="right",
                             font=dict(color=qc_axis_color)),
                 xaxis=dict(
                     title=dict(text="Row Index",
                                font=dict(color=qc_axis_color, size=14, family="Calibri"),
                                standoff=12),
-                    color=qc_axis_color,
-                    tickfont=dict(color=qc_axis_color, size=11),
-                    gridcolor=qc_grid_color, linecolor=qc_grid_color,
-                ),
+                    color=qc_axis_color, tickfont=dict(color=qc_axis_color, size=11),
+                    gridcolor=qc_grid_color, linecolor=qc_grid_color),
                 yaxis=dict(
                     title=dict(text="Sales ($)",
                                font=dict(color=qc_axis_color, size=14, family="Calibri"),
                                standoff=12),
-                    tickformat=",.0f",
-                    color=qc_axis_color,
+                    tickformat=",.0f", color=qc_axis_color,
                     tickfont=dict(color=qc_axis_color, size=11),
-                    gridcolor=qc_grid_color, linecolor=qc_grid_color,
-                ),
+                    gridcolor=qc_grid_color, linecolor=qc_grid_color),
                 font=dict(color=qc_axis_color),
                 hoverlabel=dict(bgcolor=qc_tooltip_bg, bordercolor=qc_tooltip_brd,
                                 font=dict(color=qc_tooltip_fg, size=12)),
             )
             st.plotly_chart(fig_out, use_container_width=True)
 
-            # ── Tabular outlier preview ──────────────────────────
             st.markdown("**Outlier rows (preview):**")
-            out_rows = work[z_scores > 3].copy()
-            out_rows["Z-Score"] = z_scores[z_scores > 3].round(2).values
+            out_rows = scope_out.copy()
+            out_rows["Z-Score"] = scope_z[scope_z > 3].round(2).values
             st.dataframe(out_rows.head(20), use_container_width=True, hide_index=True)
 
-            # ── Action ───────────────────────────────────────────
             oa_help = {
-                "Keep as-is":         "Leave outlier values untouched. Use this if the spikes are legitimate.",
-                "Cap at 3 Std Dev":   f"Replace any Sales value above {upper_cap:,.0f} with {upper_cap:,.0f}. This caps the spikes without dropping rows.",
+                "Keep as-is":                     "Leave outlier values untouched.",
+                "Cap at 3 Std Dev (per product)": "Cap each selected product's Sales at its own +3σ.",
             }
-            oa = st.radio("Action",
-                          list(oa_help.keys()), key="out_act", horizontal=True)
+            oa = st.radio("Action", list(oa_help.keys()), key="out_act", horizontal=True)
             st.caption(oa_help[oa])
 
             if st.button("Apply Fix", key="out_apply", type="primary"):
                 full = st.session_state.data.copy()
-                if oa == "Cap at 3 Std Dev":
-                    cap = full["Sales"].mean() + 3 * full["Sales"].std()
-                    affected = int((full["Sales"] > cap).sum())
-                    full["Sales"] = full["Sales"].clip(upper=cap)
+                if oa.startswith("Cap"):
+                    full, n_capped = cap_outliers_product_wise(full, selected_products)
                     st.session_state.action_msg = (
-                        f"✅ Outliers capped at +3σ ({cap:,.0f}). "
-                        f"{affected:,} value(s) were adjusted."
-                    )
+                        f"✅ Outliers capped per product at +3σ. {n_capped:,} value(s) adjusted.")
                 else:
                     st.session_state.action_msg = "ℹ️ Outliers kept as-is (no changes applied)."
                 st.session_state.data        = full
@@ -1933,10 +2243,10 @@ elif active == 1:
         else:
             st.info(st.session_state.action_msg or "Outliers handled.")
         with st.expander("✅ View updated data preview (after fix)", expanded=False):
-            updated = apply_date_filter(st.session_state.data, start, end)
+            updated = apply_product_filter(
+                apply_date_filter(st.session_state.data, start, end), selected_products)
             st.caption(f"Showing first 20 rows of the **updated** dataset "
-                       f"({len(updated):,} rows total in scope). The Sales column reflects "
-                       "any cap that was applied.")
+                       f"({len(updated):,} rows in scope). Sales reflects any cap applied.")
             st.dataframe(updated.head(20), use_container_width=True, hide_index=True)
         st.session_state.action_type = None
     else:
@@ -1944,63 +2254,85 @@ elif active == 1:
 
     st.divider()
 
+    # ── SUMMARY (product radio scope) ────────────────────────────
     st.subheader("Summary")
-    plot_df     = apply_date_filter(st.session_state.data, start, end)
-    total_sales = plot_df["Sales"].sum()
-    total_goals = plot_df["Goals"].sum()
-    attainment  = (total_sales / total_goals * 100) if total_goals > 0 else 0
-    ws_sales    = plot_df.groupby("Week")["Sales"].sum()
-    growth      = (
-        (ws_sales.iloc[-1] - ws_sales.iloc[0]) / ws_sales.iloc[0] * 100
-        if len(ws_sales) > 1 and ws_sales.iloc[0] != 0 else 0
-    )
+    if len(selected_products) > 1:
+        summary_scope = st.radio("View summary for",
+                                 ["All"] + selected_products,
+                                 horizontal=True, key="summary_scope")
+    else:
+        summary_scope = "All"
 
-    k1, k2, k3, k4 = st.columns(4)
-    k1.metric("Total Sales",   fmt(total_sales))
-    k2.metric("Total Goals",   fmt(total_goals))
-    k3.metric("Attainment",    f"{attainment:.1f}%")
-    k4.metric("Period Growth", f"{growth:+.1f}%")
-    style_metric_cards(**DARK_CARDS)
+    # ALL selected products + date filter — used for the DOWNLOAD (ignores the radio)
+    clean_scope = apply_product_filter(
+        apply_date_filter(st.session_state.data, start, end), selected_products)
+
+    # Summary VIEW scope — single product if the radio picked one
+    if summary_scope == "All":
+        plot_df = clean_scope.copy()
+    else:
+        plot_df = clean_scope[clean_scope["Product"] == summary_scope].copy()
+
+    if plot_df.empty:
+        st.info("No rows for this product selection.")
+    else:
+        total_sales = plot_df["Sales"].sum()
+        total_goals = plot_df["Goals"].sum()
+        attainment  = (total_sales / total_goals * 100) if total_goals > 0 else 0
+
+        # Quarter-over-Quarter growth (last quarter vs the quarter before it)
+        q_sales = (plot_df.assign(_Q=plot_df["Week"].dt.to_period("Q"))
+                          .groupby("_Q")["Sales"].sum().sort_index())
+        if len(q_sales) >= 2 and q_sales.iloc[-2] != 0:
+            qoq = (q_sales.iloc[-1] - q_sales.iloc[-2]) / q_sales.iloc[-2] * 100
+        else:
+            qoq = 0
+
+        k1, k2, k3, k4 = st.columns(4)
+        k1.metric("Total Sales",  fmt(total_sales))
+        k2.metric("Total Goals",  fmt(total_goals))
+        k3.metric("Attainment",   f"{attainment:.1f}%")
+        k4.metric("QoQ Growth",   f"{qoq:+.1f}%")
+        style_metric_cards(**DARK_CARDS)
+
+        st.divider()
+
+        st.subheader("Sales vs Goals Trend")
+        level = st.selectbox("Aggregation", ["Monthly", "Weekly", "Quarterly"], key="trend_lvl")
+        st.plotly_chart(plot_trend(plot_df, level), use_container_width=True)
+
+        st.divider()
+
+        st.subheader("Territory Performance")
+        terr = (plot_df.groupby(["Territory ID", "Territory Name"])[["Sales", "Goals"]]
+                .sum().reset_index().sort_values("Sales", ascending=False))
+        terr["Attainment %"] = (terr["Sales"] / terr["Goals"] * 100).round(1)
+
+        tc1, tc2 = st.columns(2)
+        with tc1:
+            st.markdown("**🥇 Top 5 Territories**")
+            st.dataframe(
+                terr.head(5)[["Territory Name", "Sales", "Attainment %"]]
+                .style.format({"Sales": "{:,.0f}", "Attainment %": "{:.1f}%"}),
+                use_container_width=True, hide_index=True)
+        with tc2:
+            st.markdown("**⚠️ Bottom 5 Territories**")
+            st.dataframe(
+                terr.tail(5)[["Territory Name", "Sales", "Attainment %"]]
+                .style.format({"Sales": "{:,.0f}", "Attainment %": "{:.1f}%"}),
+                use_container_width=True, hide_index=True)
+
+        with st.expander("📄 Raw Data Preview (first 100 rows)"):
+            st.dataframe(plot_df.head(100), use_container_width=True, hide_index=True)
 
     st.divider()
 
-    st.subheader("Sales vs Goals Trend")
-    level = st.selectbox("Aggregation", ["Weekly", "Monthly", "Quarterly"], key="trend_lvl")
-    st.plotly_chart(plot_trend(plot_df, level), use_container_width=True)
-
-    st.divider()
-
-    st.subheader("Territory Performance")
-    terr = (
-        plot_df.groupby(["Territory ID", "Territory Name"])[["Sales", "Goals"]]
-        .sum().reset_index().sort_values("Sales", ascending=False)
-    )
-    terr["Attainment %"] = (terr["Sales"] / terr["Goals"] * 100).round(1)
-
-    tc1, tc2 = st.columns(2)
-    with tc1:
-        st.markdown("**🥇 Top 5 Territories**")
-        st.dataframe(
-            terr.head(5)[["Territory Name", "Sales", "Attainment %"]]
-            .style.format({"Sales": "{:,.0f}", "Attainment %": "{:.1f}%"}),
-            use_container_width=True, hide_index=True,
-        )
-    with tc2:
-        st.markdown("**⚠️ Bottom 5 Territories**")
-        st.dataframe(
-            terr.tail(5)[["Territory Name", "Sales", "Attainment %"]]
-            .style.format({"Sales": "{:,.0f}", "Attainment %": "{:.1f}%"}),
-            use_container_width=True, hide_index=True,
-        )
-
-    with st.expander("📄 Raw Data Preview (first 100 rows)"):
-        st.dataframe(plot_df.head(100), use_container_width=True, hide_index=True)
-
+    # ── DOWNLOAD + NEXT ──────────────────────────────────────────
     dl_col, nxt_col = st.columns(2)
     with dl_col:
         st.download_button(
             "⬇️ Download Cleaned Data",
-            data=to_excel(plot_df, "Clean_Data",
+            data=to_excel(clean_scope, "Clean_Data",
                           currency_cols=["Sales", "Goals"],
                           title="Cleaned Sales Data"),
             file_name="clean_data.xlsx",
@@ -2023,9 +2355,45 @@ elif active == 2:
             go_to_tab(1)
         st.stop()
 
-    df     = st.session_state.data.copy()
+    full_df  = st.session_state.data.copy()
+    products = st.session_state.selected_products or sorted(
+        full_df["Product"].dropna().astype(str).unique().tolist())
+
+    def _reset_product_state():
+        for k in ("nation_goal", "weighted_result_df", "chosen_params",
+                  "bt_result_df", "bt_metrics", "opt_results_df", "opt_best_params"):
+            st.session_state[k] = None
+        st.session_state.nation_goal_submitted = False
+        st.session_state.ngs_model_tab = None
+        st.session_state.bt_intro_seen = False
+        st.session_state.bt_mode = None
+        st.session_state.chosen_params_src = None
+
+    # ── Product picker (only when more than one product was selected) ──
+    if len(products) > 1 and st.session_state.gs_product is None:
+        st.subheader("Choose Product for National Goal Setting")
+        st.caption("Goal setting runs one product at a time. Pick a product to begin.")
+        done = st.session_state.gs_completed or []
+        if done:
+            st.success("✅ Completed so far: " + ", ".join(done))
+        remaining = [p for p in products if p not in done] or products
+        pick = st.radio("Product", remaining, key="gs_pick")
+        if st.button("Submit", type="primary"):
+            st.session_state.gs_product = pick
+            _reset_product_state()
+            st.rerun()
+        st.stop()
+
+    # Single product → auto-select, skip the picker
+    if st.session_state.gs_product is None:
+        st.session_state.gs_product = products[0]
+
+    gs_product = st.session_state.gs_product
+    df     = full_df[full_df["Product"] == gs_product].copy()
     n_terr = df["Territory ID"].nunique()
 
+    st.caption(f"🧪 Goal setting for product: **{gs_product}**")
+    
     if not st.session_state.nation_goal_submitted:
         st.subheader("Enter National Goal")
         st.info(
@@ -2139,11 +2507,11 @@ elif active == 2:
                 )
                 pc1, pc2, pc3 = st.columns(3)
                 with pc1:
-                    mr_weight_pct = st.slider(
-                        "MR Weight (Most Recent)",
-                        min_value=0, max_value=100, value=70, step=5,
-                        format="%d%%",
-                        help="Weight applied to Most Recent period sales.",
+                    mr_weight_pct = st.number_input(
+                        "Baseline Weight (MR) %",
+                        min_value=0.0, max_value=100.0, value=70.0, step=0.5,
+                        format="%.1f",
+                        help="Weight applied to Most Recent period sales. Decimals OK.",
                     )
                     mr_weight = mr_weight_pct / 100.0
                 with pc2:
@@ -2151,10 +2519,10 @@ elif active == 2:
                     st.metric("P Weight (Prior)", f"{p_weight * 100:.0f}%",
                               delta="auto = 100% − MR Weight", delta_color="off")
                 with pc3:
-                    hist_scale_pct = st.slider(
-                        "Historical Sales Scale",
-                        min_value=0, max_value=200, value=100, step=5,
-                        format="%d%%",
+                    hist_scale_pct = st.number_input(
+                        "Historical Sales Scale %",
+                        min_value=0.0, max_value=200.0, value=100.0, step=0.5,
+                        format="%.1f",
                         help="Scaling factor applied to all historical sales.",
                     )
                     hist_scale = hist_scale_pct / 100.0
@@ -2169,26 +2537,26 @@ elif active == 2:
                 pc4, pc5, pc6 = st.columns(3)
                 with pc4:
                     # Volume Balance shown in basis points × 10 (0.0%–10.0%, step 0.5%)
-                    vol_balance_pct = st.slider(
-                        "Volume Balance",
-                        min_value=0.0, max_value=10.0, value=1.5, step=0.5,
-                        format="%.1f%%",
+                    vol_balance_pct = st.number_input(
+                        "Volume Balance %",
+                        min_value=0.0, max_value=10.0, value=1.5, step=0.1,
+                        format="%.1f",
                         help="Volume balancing moderator. Higher = stronger smoothing.",
                     )
                     vol_balance = vol_balance_pct / 100.0
                 with pc5:
-                    growth_cap_pct = st.slider(
-                        "Growth Cap (Max)",
-                        min_value=0, max_value=30, value=6, step=1,
-                        format="%d%%",
+                    growth_cap_pct = st.number_input(
+                        "Growth Cap (Max) %",
+                        min_value=0.0, max_value=100.0, value=6.0, step=0.5,
+                        format="%.1f",
                         help="Maximum allowed growth % per territory.",
                     )
                     growth_cap = growth_cap_pct / 100.0
                 with pc6:
-                    growth_floor_pct = st.slider(
-                        "Growth Floor (Min)",
-                        min_value=-30, max_value=30, value=0, step=1,
-                        format="%d%%",
+                    growth_floor_pct = st.number_input(
+                        "Growth Floor (Min) %",
+                        min_value=-50.0, max_value=50.0, value=0.0, step=0.5,
+                        format="%.1f",
                         help="Minimum allowed growth % per territory.",
                     )
                     growth_floor = growth_floor_pct / 100.0
@@ -2203,10 +2571,10 @@ elif active == 2:
                 )
                 pc7, pc8, pc9 = st.columns(3)
                 with pc7:
-                    flat_goal_pct_int = st.slider(
+                    flat_goal_pct_int = st.number_input(
                         "Flat Goal %",
-                        min_value=0, max_value=100, value=0, step=5,
-                        format="%d%%",
+                        min_value=0.0, max_value=100.0, value=0.0, step=0.5,
+                        format="%.1f",
                         help="Equal-share portion of National Goal before weighting.",
                     )
                     flat_goal_pct = flat_goal_pct_int / 100.0
@@ -2655,8 +3023,8 @@ elif active == 2:
             )
             nav_l, nav_r = st.columns([1, 1])
             with nav_l:
-                if st.button("Next: Final Allocation →", type="primary", use_container_width=True):
-                    go_to_tab(3)
+                if st.button("Next: Back Testing →", type="primary", use_container_width=True):
+                    go_to_tab(4)
 
         # ── FAIR SHARE MODEL ──────────────────────────────────────
         elif selected == 1:
@@ -2737,9 +3105,10 @@ elif active == 2:
 
             eq_col, _ = st.columns([1, 2])
             with eq_col:
-                eq_pct = st.slider(
-                    "Portion to Allocate Equally (%)", 0, 100,
-                    st.session_state.eq_pct, step=5,
+                eq_pct = st.number_input(
+                    "Portion to Allocate Equally (%)",
+                    min_value=0.0, max_value=100.0,
+                    value=float(st.session_state.eq_pct), step=0.5, format="%.1f",
                     help="What % of the National Goal to split equally across territories. "
                          "100% means every territory gets exactly the same goal.",
                 )
@@ -2808,26 +3177,26 @@ elif active == 3:
         "Once you're satisfied, proceed to **Back Testing** to validate the model against past data."
     )
 
-    # Guard: need the weighted model to have been run
-    if st.session_state.weighted_result_df is None:
+    gs_product  = st.session_state.gs_product
+    nation_goal = st.session_state.nation_goal
+    params      = st.session_state.chosen_params or st.session_state.weighted_params
+
+    if st.session_state.data is None or gs_product is None or nation_goal is None or params is None:
         st.warning(
-            "⚠️ The Weighted Model has not been run yet. "
-            "Please go to **National Goal Setting → Weighted Model** and generate an allocation first."
-        )
-        st.caption(
-            "Note: Fair Share and Equal Allocation models are downloaded directly "
-            "from their respective sections on the National Goal Setting tab — they don't "
-            "appear on this tab."
+            "⚠️ Run the Weighted Model, then Back Testing, before viewing Final Allocation "
+            "(National Goal Setting → Weighted Model → Back Testing)."
         )
         if st.button("← Back to National Goal Setting"):
             go_to_tab(2)
         st.stop()
 
-    nation_goal = st.session_state.nation_goal
-    wr          = st.session_state.weighted_result_df
-    ws          = st.session_state.weighted_summary
-    wp          = st.session_state.weighted_params
-
+    # Re-run the final allocation on the SELECTED PRODUCT with the chosen parameters
+    df_prod = st.session_state.data[st.session_state.data["Product"] == gs_product].copy()
+    wr, ws  = compute_weighted_model(df_prod, nation_goal, params)
+    wp      = params
+    src     = st.session_state.chosen_params_src or "model"
+    st.caption(f"🧪 Product: **{gs_product}**  ·  parameters from: **{src}**")
+    
     # ── Headline KPIs ────────────────────────────────────────────
     st.subheader("Headline")
     st.markdown(
@@ -2946,30 +3315,51 @@ elif active == 3:
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     )
 
-    # ── Navigate ─────────────────────────────────────────────────
+   # ── Workflow: another product? ───────────────────────────────
     st.divider()
-    nav_l, nav_r = st.columns([1, 1])
-    with nav_l:
-        if st.button("Next: Back Testing →", type="primary", use_container_width=True):
-            go_to_tab(4)
-    with nav_r:
-        if st.button("← Back to National Goal Setting", use_container_width=True):
-            go_to_tab(2)
+    st.markdown("##### Workflow")
+
+    completed = list(st.session_state.gs_completed or [])
+    if gs_product not in completed:
+        completed.append(gs_product)
+    all_products = st.session_state.selected_products or [gs_product]
+    remaining = [p for p in all_products if p not in completed]
+
+    if remaining:
+        st.info(f"Finished **{gs_product}**. Set goals for another product?")
+        w_l, w_r = st.columns(2)
+        with w_l:
+            if st.button("Yes — next product →", type="primary", use_container_width=True):
+                st.session_state.gs_completed = completed
+                st.session_state.gs_product = None      # forces the picker again
+                for k in ("nation_goal", "weighted_result_df", "chosen_params",
+                          "bt_result_df", "bt_metrics", "opt_results_df", "opt_best_params"):
+                    st.session_state[k] = None
+                st.session_state.nation_goal_submitted = False
+                st.session_state.ngs_model_tab = None
+                st.session_state.bt_intro_seen = False
+                st.session_state.bt_mode = None
+                st.session_state.chosen_params_src = None
+                go_to_tab(2)
+        with w_r:
+            if st.button("No — back to Instructions", use_container_width=True):
+                st.session_state.gs_completed = completed
+                go_to_tab(0)
+    else:
+        st.success("🎉 All selected products have been goal-set.")
+        if st.button("← Back to Instructions", type="primary"):
+            st.session_state.gs_completed = completed
+            go_to_tab(0)
+
+    st.divider()
+    if st.button("← Back to Back Testing", use_container_width=False):
+        go_to_tab(4)
             
 # ═══════════════════════════════════════════════════════════════════
 # TAB 4 — BACK TESTING
 # ═══════════════════════════════════════════════════════════════════
 elif active == 4:
     st.subheader("🔁 Back Testing")
-    st.markdown(
-        "**Back Testing answers one question: *if we had used the Weighted Model last quarter, "
-        "would it have set better goals than what we actually used?*** "
-        "Pick a quarter where you already know what happened (the **Test Quarter**) and a "
-        "quarter just before it (the **Prior Quarter**). The model is trained on history up to "
-        "and including the Prior Quarter, then asked to allocate the Test Quarter's national "
-        "total. We compare its goals against the goals you actually set and score both against "
-        "real sales."
-    )
 
     if st.session_state.data is None:
         st.warning("⚠️ Please upload and validate your data first.")
@@ -2977,7 +3367,36 @@ elif active == 4:
             go_to_tab(1)
         st.stop()
 
-    bt_df = st.session_state.data.copy()
+    gs_product = st.session_state.gs_product
+    if gs_product is None:
+        st.warning("⚠️ Pick a product on the National Goal Setting tab first.")
+        if st.button("← Back to National Goal Setting"):
+            go_to_tab(2)
+        st.stop()
+
+    # ── Introduction gate ──
+    if not st.session_state.bt_intro_seen:
+        st.markdown(
+            "### Why back test?\n"
+            "Before you trust the Weighted Model to set live goals, it helps to ask: "
+            "**would it have set *better* goals last quarter than the ones we actually used?**\n\n"
+            "Back testing answers that. It trains the model on history up to a past quarter, "
+            "asks it to set goals for the quarter that followed, then scores those goals against "
+            "what really happened — and compares them to the goals you originally set.\n\n"
+            "**What it evaluates:** accuracy (how close goals were to actual sales), fairness "
+            "(cap/floor behaviour), and stability (does the model hold up across several quarters, "
+            "not just one lucky one).\n\n"
+            "You can either tune the parameters yourself, or let the **Grid Search Optimizer** "
+            "find the most stable settings automatically."
+        )
+        if st.button("Proceed to Back Testing →", type="primary"):
+            st.session_state.bt_intro_seen = True
+            st.rerun()
+        st.stop()
+
+    st.caption(f"🧪 Back testing product: **{gs_product}**")
+
+    bt_df = st.session_state.data[st.session_state.data["Product"] == gs_product].copy()
     bt_df["Week"]    = pd.to_datetime(bt_df["Week"])
     bt_df["Quarter"] = bt_df["Week"].dt.to_period("Q")
     quarters_avail   = sorted(bt_df["Quarter"].dropna().unique())
@@ -2989,6 +3408,122 @@ elif active == 4:
         st.stop()
 
     quarter_labels = [str(q) for q in quarters_avail]
+    
+    # ──────────────────────────────────────────────────────────────
+    # Mode: manual entry vs grid-search optimizer
+    # ──────────────────────────────────────────────────────────────
+    st.markdown("##### How would you like to back test?")
+    bt_mode = st.radio("Mode",
+                       ["Manual Parameter Entry", "Grid Search Optimizer"],
+                       horizontal=True, key="bt_mode_radio")
+    st.divider()
+
+    if bt_mode == "Grid Search Optimizer":
+        st.markdown("##### Grid Search Optimizer")
+        st.markdown(
+            "Searches parameter combinations across several historical quarters, scores each with "
+            "a composite metric, and picks the most **stable** performer — not just the one that "
+            "happens to win a single quarter."
+        )
+
+        quarters = sorted(bt_df["Week"].dt.to_period("Q").dropna().unique())
+        max_q = st.number_input(
+            "Quarters to back test across",
+            min_value=1, max_value=max(1, len(quarters) - 1),
+            value=min(3, len(quarters) - 1), step=1, key="opt_max_q",
+            help="Rolling back tests across recent quarters. More = steadier but slower.")
+        pairs = build_quarter_pairs(quarters, int(max_q))
+        st.caption("Testing quarters: " + ", ".join(str(t) for t, _ in pairs))
+
+        with st.expander("⚙️ Candidate ranges (coarse grid)", expanded=True):
+            r1, r2 = st.columns(2)
+            with r1:
+                w_lo = st.number_input("MR Weight from %",  0.0, 100.0, 50.0, 5.0, key="opt_w_lo")
+                w_hi = st.number_input("MR Weight to %",    0.0, 100.0, 90.0, 5.0, key="opt_w_hi")
+                w_st = st.number_input("MR Weight step %",  1.0,  50.0, 10.0, 1.0, key="opt_w_st")
+                v_lo = st.number_input("Vol Balance from %",0.0,  20.0,  0.0, 1.0, key="opt_v_lo")
+                v_hi = st.number_input("Vol Balance to %",  0.0,  20.0, 10.0, 1.0, key="opt_v_hi")
+                v_st = st.number_input("Vol Balance step %",1.0,  10.0,  2.0, 1.0, key="opt_v_st")
+            with r2:
+                f_lo = st.number_input("Floor from %", -50.0, 50.0, -20.0, 5.0, key="opt_f_lo")
+                f_hi = st.number_input("Floor to %",   -50.0, 50.0,   0.0, 5.0, key="opt_f_hi")
+                f_st = st.number_input("Floor step %",   1.0, 50.0,  10.0, 1.0, key="opt_f_st")
+                c_lo = st.number_input("Cap from %",     0.0,100.0,  10.0, 5.0, key="opt_c_lo")
+                c_hi = st.number_input("Cap to %",       0.0,100.0,  30.0, 5.0, key="opt_c_hi")
+                c_st = st.number_input("Cap step %",     1.0, 50.0,  10.0, 1.0, key="opt_c_st")
+            refine = st.checkbox("Refine around best (fine ±1% pass)", value=True, key="opt_refine")
+
+        ranges = {
+            "mr_weight":    _frange(w_lo, w_hi, w_st),
+            "vol_balance":  _frange(v_lo, v_hi, v_st),
+            "growth_floor": _frange(f_lo, f_hi, f_st),
+            "growth_cap":   _frange(c_lo, c_hi, c_st),
+        }
+        n_combo = sum(1 for w in ranges["mr_weight"] for v in ranges["vol_balance"]
+                      for f in ranges["growth_floor"] for c in ranges["growth_cap"] if f <= c)
+        st.info(f"Coarse grid: **{n_combo} combinations** × **{len(pairs)} quarters** "
+                f"= **{n_combo * len(pairs)} model runs**"
+                + (" (+ a small fine pass)" if refine else "")
+                + ". Large grids can take 20–60 seconds.")
+
+        base_bt_params = {"hist_scale": 1.0, "flat_goal_pct": 0.0,
+                          "mr3_window": 3, "p3_window": 3,
+                          "mr_weight": 0.7, "p_weight": 0.3, "vol_balance": 0.03,
+                          "growth_cap": 0.10, "growth_floor": -0.10}
+
+        if st.button("▶️ Run Optimizer", type="primary", key="opt_run"):
+            prog = st.progress(0.0)
+            status = st.empty()
+            def _cb(done, total):
+                prog.progress(min(done / total, 1.0))
+                status.caption(f"Evaluating combination {done} / {total} …")
+            with st.spinner("Searching parameter space…"):
+                res_df, best = grid_search(bt_df, pairs, base_bt_params, ranges,
+                                           progress_cb=_cb, refine=refine)
+            prog.empty(); status.empty()
+            if res_df.empty or best is None:
+                st.error("No valid combinations — widen the ranges or add more quarters.")
+            else:
+                st.session_state.opt_results_df  = res_df
+                st.session_state.opt_best_params = best
+
+        res_df = st.session_state.opt_results_df
+        best   = st.session_state.opt_best_params
+        if res_df is not None and best is not None:
+            st.success("✅ Optimization complete — best (most stable) parameters below.")
+            ob1, ob2, ob3, ob4 = st.columns(4)
+            ob1.metric("MR Weight",    f"{best['mr_weight']*100:.1f}%")
+            ob2.metric("Vol Balance",  f"{best['vol_balance']*100:.1f}%")
+            ob3.metric("Growth Floor", f"{best['growth_floor']*100:.1f}%")
+            ob4.metric("Growth Cap",   f"{best['growth_cap']*100:.1f}%")
+            style_metric_cards(**DARK_CARDS)
+
+            ren = {"mr_weight_%": "MR Wt %", "vol_balance_%": "Vol Bal %",
+                   "growth_floor_%": "Floor %", "growth_cap_%": "Cap %",
+                   "stability_score": "Stability", "avg_composite": "Avg Composite",
+                   "avg_wmape": "Avg WMAPE", "std_wmape": "WMAPE Std",
+                   "avg_within_tol": "Within ±10%", "avg_bias": "Bias",
+                   "avg_cap_floor_hit": "Cap/Floor Hit"}
+            show = res_df.head(15)[list(ren.keys())].rename(columns=ren).copy()
+            for c in ["Stability", "Avg Composite", "Avg WMAPE", "WMAPE Std", "Bias"]:
+                show[c] = show[c].map(lambda x: f"{x:.4f}")
+            show["Within ±10%"]  = show["Within ±10%"].map(lambda x: f"{x:.0%}")
+            show["Cap/Floor Hit"] = show["Cap/Floor Hit"].map(lambda x: f"{x:.0%}")
+            st.markdown("**Top 15 parameter sets (lower Stability = better)**")
+            st.dataframe(show, use_container_width=True, hide_index=True)
+
+            st.download_button(
+                "⬇️ Download Full Optimizer Results",
+                data=to_excel(res_df, "Optimizer", title=f"Grid Search — {gs_product}"),
+                file_name="optimizer_results.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+
+            if st.button("Use best parameters → Final Allocation", type="primary", key="opt_use"):
+                st.session_state.chosen_params     = dict(best)
+                st.session_state.chosen_params_src = "optimizer"
+                go_to_tab(3)
+        st.stop()
+    # ↓↓↓ Manual Parameter Entry continues below (unchanged structure) ↓↓↓
 
     # ──────────────────────────────────────────────────────────────
     # 1) Quarter selectors — Test Quarter (Recent) + Prior Quarter
@@ -3063,18 +3598,20 @@ elif active == 4:
         )
         bp1, bp2, bp3 = st.columns(3)
         with bp1:
-            bt_mr_pct = st.slider("MR Weight (Most Recent)", 0, 100, 70, 5,
-                                  format="%d%%", key="bt_mr_pct",
-                                  help="Weight applied to the Most Recent quarter's sales.")
+            # MR Weight
+            bt_mr_pct = st.number_input("MR Weight (Most Recent) %", 0.0, 100.0, 70.0, 0.5,
+                                        format="%.1f", key="bt_mr_pct",
+                                        help="Weight applied to the Most Recent quarter's sales.")
             bt_mr = bt_mr_pct / 100.0
         with bp2:
             bt_p = 1.0 - bt_mr
             st.metric("P Weight (Prior)", f"{bt_p * 100:.0f}%",
                       delta="auto = 100% − MR Weight", delta_color="off")
         with bp3:
-            bt_hist_pct = st.slider("Historical Sales Scale", 0, 200, 100, 5,
-                                    format="%d%%", key="bt_hist_pct",
-                                    help="Scaling factor on the training sales.")
+            # Historical Sales Scale
+            bt_hist_pct = st.number_input("Historical Sales Scale %", 0.0, 200.0, 100.0, 0.5,
+                                          format="%.1f", key="bt_hist_pct",
+                                          help="Scaling factor on the training sales.")
             bt_hist = bt_hist_pct / 100.0
 
         # ── Row 2: Smoothing + cap/floor ──────────────────────────
@@ -3086,19 +3623,22 @@ elif active == 4:
         )
         bp4, bp5, bp6 = st.columns(3)
         with bp4:
-            bt_vol_pct = st.slider("Volume Balance", 0.0, 10.0, 3.0, 0.5,
-                                   format="%.1f%%", key="bt_vol_pct",
-                                   help="Higher = stronger smoothing toward the average.")
+            # Volume Balance
+            bt_vol_pct = st.number_input("Volume Balance %", 0.0, 10.0, 3.0, 0.1,
+                                         format="%.1f", key="bt_vol_pct",
+                                         help="Higher = stronger smoothing toward the average.")
             bt_vol = bt_vol_pct / 100.0
         with bp5:
-            bt_cap_pct = st.slider("Growth Cap (Max)", 0, 30, 2, 1,
-                                   format="%d%%", key="bt_cap_pct",
-                                   help="Maximum allowed growth % per territory.")
+            # Growth Cap
+            bt_cap_pct = st.number_input("Growth Cap (Max) %", 0.0, 100.0, 2.0, 0.5,
+                                         format="%.1f", key="bt_cap_pct",
+                                         help="Maximum allowed growth % per territory.")
             bt_cap = bt_cap_pct / 100.0
         with bp6:
-            bt_floor_pct = st.slider("Growth Floor (Min)", -30, 30, -2, 1,
-                                     format="%d%%", key="bt_floor_pct",
-                                     help="Minimum allowed growth % per territory.")
+            # Growth Floor
+            bt_floor_pct = st.number_input("Growth Floor (Min) %", -50.0, 50.0, -2.0, 0.5,
+                                           format="%.1f", key="bt_floor_pct",
+                                           help="Minimum allowed growth % per territory.")
             bt_floor = bt_floor_pct / 100.0
 
         # ── Row 3: Flat goal + windows ────────────────────────────
@@ -3109,9 +3649,10 @@ elif active == 4:
         )
         bp7, bp8, bp9 = st.columns(3)
         with bp7:
-            bt_flat_pct = st.slider("Flat Goal %", 0, 100, 0, 5,
-                                    format="%d%%", key="bt_flat_pct",
-                                    help="Equal-share portion before weighting.")
+            # Flat Goal
+            bt_flat_pct = st.number_input("Flat Goal %", 0.0, 100.0, 0.0, 0.5,
+                                          format="%.1f", key="bt_flat_pct",
+                                          help="Equal-share portion before weighting.")
             bt_flat = bt_flat_pct / 100.0
         with bp8:
             bt_mrw = st.number_input("MR Window (months)", 1, 12, 3, 1,
@@ -3837,9 +4378,18 @@ elif active == 4:
         )
     st.info(f"**Bottom line:** {bottom_line}")
     
-    if st.button("← Back to Final Allocation", key="bt_back",
-                 use_container_width=False):
-        go_to_tab(3)
-
+    st.divider()
+    st.markdown("##### Carry these parameters into Final Allocation")
+    st.markdown("When you're happy with the manual settings above, send them forward.")
+    cf_l, cf_r = st.columns(2)
+    with cf_l:
+        if st.button("Use these parameters → Final Allocation", type="primary",
+                     use_container_width=True, key="bt_use_manual"):
+            st.session_state.chosen_params     = dict(bt_params)
+            st.session_state.chosen_params_src = "manual"
+            go_to_tab(3)
+    with cf_r:
+        if st.button("← Back to National Goal Setting", use_container_width=True, key="bt_back"):
+            go_to_tab(2)
 
 
